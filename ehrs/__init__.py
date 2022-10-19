@@ -32,6 +32,6 @@ def import_ehrs(ehrs_dir, namespace):
             ehrs_name = file[: file.find('.py')] if file.endswith('.py') else file
             importlib.import_module(namespace + '.' + ehrs_name)
 
-# automatically import any Python files in the constants/ directory
+# automatically import any Python files in the ehrs/ directory
 ehrs_dir = os.path.dirname(__file__)
-import_ehrs(ehrs_dir, 'constants')
+import_ehrs(ehrs_dir, 'ehrs')
