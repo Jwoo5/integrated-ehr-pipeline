@@ -1,7 +1,15 @@
+import os
+import sys
 import logging
 
 import argparse
 
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level = os.environ.get("LOGLEVEL", "INFO").upper(),
+    stream = sys.stdout
+)
 logger = logging.getLogger(__name__)
 
 def get_parser():
@@ -22,7 +30,7 @@ def get_parser():
     )
     parser.add_argument(
         '--data', metavar='DIR', default=None,
-        help='directory containing .csv files of --ehr.'
+        help='directory containing data files of the given ehr (--ehr).'
             'if not given, try to download from the internet.'
     )
     parser.add_argument(
@@ -61,15 +69,15 @@ def get_parser():
         '--pred_size', type=int, default=48,
         help='prediction window size by the hour'
     )
+    parser.add_argument(
+        '--first_icu', action='store_true',
+        help='whether to use only the first icu or not'
+    )
+
+    return parser
 
 def main(args):
     task = args.task
-
-    if args.data is not None:
-
-
-    if task is None:
-        logger.info('...')
 
 if __name__ == "__main__":
     parser = get_parser()
