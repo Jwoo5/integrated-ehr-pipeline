@@ -1,7 +1,5 @@
 import os
 import sys
-import subprocess
-import shutil
 import logging
 
 from datetime import datetime
@@ -9,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from ehrs import register_ehr, EHR
+from utils.utils import get_physionet_dataset, get_ccs
 
 logger = logging.getLogger(__name__)
 
@@ -23,105 +22,40 @@ class MIMICIII(EHR):
         self.ccs_path = cfg.ccs
 
         cache_dir = os.path.expanduser("~/.cache/ehr")
+        physionet_file_path = "mimiciii/1.4/"
 
-        if self.data_dir is None or not os.path.exists(self.data_dir):
-            if not os.path.exists(cache_dir):
-                os.makedirs(cache_dir)
-            self.data_dir = os.path.join(cache_dir, "mimiciii")
+        self.data_dir = get_physionet_dataset(cfg, physionet_file_path, cache_dir)
+        self.ccs_path = get_ccs(cfg, cache_dir)
 
-            if os.path.exists(self.data_dir) and len(os.listdir(self.data_dir)) == 30:
-                logger.info("Loaded cached ehr data from {}.".format(self.data_dir))
-            else:
-                logger.info(
-                    "Data is not found so try to download from the internet. "
-                    "It requires ~7GB drive spaces. "
-                    "Note that this is a restricted-access resource. "
-                    "Please log in to physionet.org with a credentialed user."
-                )
+        postfix = "" if cfg.data_uncompressed else ".gz"
 
-                username = input("Email or Username: ")
-                subprocess.run(
-                    [
-                        "wget",
-                        "-r",
-                        "-N",
-                        "-c",
-                        "np",
-                        "--user",
-                        username,
-                        "--ask-password",
-                        "https://physionet.org/files/mimiciii/1.4/",
-                        "-P",
-                        cache_dir,
-                    ]
-                )
-
-                if (
-                    len(
-                        os.listdir(
-                            os.path.join(cache_dir, "physionet.org/files/mimiciii/1.4")
-                        )
-                    )
-                    != 30
-                ):
-                    raise AssertionError(
-                        "Access refused. Please log in with a credentialed user."
-                    )
-
-                os.rename(
-                    os.path.join(cache_dir, "physionet.org/files/mimiciii/1.4"),
-                    self.data_dir,
-                )
-                shutil.rmtree(os.path.join(cache_dir, "physionet.org"))
-        if self.ccs_path is None or not os.path.exists(self.ccs_path):
-            if not os.path.exists(cache_dir):
-                os.makedirs(cache_dir)
-            self.ccs_path = os.path.join(cache_dir, "ccs_multi_dx_tool_2015.csv")
-
-            if os.path.exists(self.ccs_path):
-                logger.info("Loaded cached ccs file from {}".format(self.ccs_path))
-            else:
-                logger.info(
-                    "`ccs_multi_dx_tool_2015.csv` is not found so try to download from the internet."
-                )
-
-                subprocess.run(
-                    [
-                        "wget",
-                        "https://www.hcup-us.ahrq.gov/toolssoftware/ccs/Multi_Level_CCS_2015.zip",
-                        "-P",
-                        cache_dir,
-                    ]
-                )
-
-                import zipfile
-
-                with zipfile.ZipFile(
-                    os.path.join(cache_dir, "Multi_Level_CCS_2015.zip"), "r"
-                ) as zip_ref:
-                    zip_ref.extractall(os.path.join(cache_dir, "tmp"))
-                os.rename(
-                    os.path.join(cache_dir, "tmp", "ccs_multi_dx_tool_2015.csv"),
-                    self.ccs_path,
-                )
-                os.remove(os.path.join(cache_dir, "Multi_Level_CCS_2015.zip"))
-                shutil.rmtree(os.path.join(cache_dir, "tmp"))
-
-        self.icustays = "ICUSTAYS.csv.gz"
-        self.patients = "PATIENTS.csv.gz"
-        self.admissions = "ADMISSIONS.csv.gz"
-        self.diagnoses = "DIAGNOSES_ICD.csv.gz"
+        self.icustays = f"ICUSTAYS.csv{postfix}"
+        self.patients = f"PATIENTS.csv{postfix}"
+        self.admissions = f"ADMISSIONS.csv{postfix}"
+        self.diagnoses = f"DIAGNOSES_ICD.csv{postfix}"
 
         # XXX more features? user choice?
         self.features = [
             {
-                "fname": "LABEVENTS.csv.gz",
+                "fname": f"LABEVENTS.csv{postfix}",
                 "type": "lab",
                 "timestamp": "CHARTTIME",
             },
-            {"fname": "PRESCRIPTIONS.csv.gz", "type": "med", "timestamp": "STARTDATE"},
-            {"fname": "INPUTEVENTS_MV.csv.gz", "type": "inf", "timestamp": "STARTTIME"},
-            {"fname": "INPUTEVENTS_CV.csv.gz", "type": "inf", "timestamp": "CHARTTIME"},
+            {
+                "fname": f"PRESCRIPTIONS.csv{postfix}",
+                "type": "med",
+                "timestamp": "STARTDATE",
+            },
+            {
+                "fname": f"INPUTEVENTS_MV.csv{postfix}",
+                "type": "inf",
+                "timestamp": "STARTTIME",
+            },
+            {
+                "fname": f"INPUTEVENTS_CV.csv{postfix}",
+                "type": "inf",
+                "timestamp": "CHARTTIME",
+            },
         ]
 
         self.max_event_size = (
@@ -322,6 +256,10 @@ class MIMICIII(EHR):
         ] = "IN_HOSPITAL_MORTALITY"
 
         # define final acuity prediction task
+        logger.info("Fincal Acuity Categories")
+        logger.info(
+            labeled_cohort["DISCHARGE_LOCATION"].astype("category").cat.categories
+        )
         labeled_cohort["final_acuity"] = (
             labeled_cohort["DISCHARGE_LOCATION"].astype("category").cat.codes
         )
@@ -354,7 +292,10 @@ class MIMICIII(EHR):
             | (labeled_cohort["imminent_discharge"] == "IN_ICU_MORTALITY"),
             "imminent_discharge",
         ] = "Death"
-
+        logger.info("Immminent Discharge Categories")
+        logger.info(
+            labeled_cohort["imminent_discharge"].astype("category").cat.categories
+        )
         labeled_cohort["imminent_discharge"] = (
             labeled_cohort["imminent_discharge"].astype("category").cat.codes
         )
@@ -390,21 +331,12 @@ class MIMICIII(EHR):
             x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
         }
 
-        dx1_list = []
-        for dxs in labeled_cohort["ICD9_CODE"]:
-            one_list = []
-            for dx in dxs:
-                if dx not in lvl1:
-                    continue
-                dx1 = lvl1[dx]
-                one_list.append(dx1)
-            dx1_list.append(list(set(one_list)))
+        labeled_cohort.dropna(subset=["ICD9_CODE"], inplace=True)
+        labeled_cohort["diagnosis"] = labeled_cohort["ICD9_CODE"].map(
+            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
+        )
 
-        labeled_cohort["diagnosis"] = pd.Series(dx1_list)
-        # XXX what does this line do?
-        labeled_cohort = labeled_cohort[
-            labeled_cohort["diagnosis"] != float
-        ].reset_index(drop=True)
+        labeled_cohort.dropna(subset=["diagnosis"], inplace=True)
         labeled_cohort = labeled_cohort.drop(columns=["ICD9_CODE"])
 
         self.labeled_cohort = labeled_cohort

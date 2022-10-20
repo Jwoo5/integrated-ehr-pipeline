@@ -44,6 +44,13 @@ def get_parser():
         help="path to `ccs_multi_dx_tool_2015.csv`"
         "if not given, try to download from the internet.",
     )
+    parser.add_argument(
+        "--gem",
+        type=str,
+        default=None,
+        help="path to `icd10cmtoicd9gem.csv`"
+        "if not given, try to download from the internet.",
+    )
 
     # misc
     parser.add_argument(
@@ -75,7 +82,11 @@ def get_parser():
         action="store_true",
         help="whether to use only the first icu or not",
     )
-
+    parser.add_argument(
+        "--data_uncompressed",
+        action="store_true",
+        help="whether the data is uncompressed or not",
+    )
     return parser
 
 
