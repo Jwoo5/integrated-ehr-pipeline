@@ -75,6 +75,10 @@ def get_parser():
         action="store_true",
         help="whether to use only the first icu or not",
     )
+    parser.add_argument(
+        '--chunk_size', type=int, default=1024,
+        help='chunk size to read large csv files'
+    )
 
     return parser
 
