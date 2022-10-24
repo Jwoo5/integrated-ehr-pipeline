@@ -1,10 +1,17 @@
 import os
 import sys
 import logging
+import glob
+import pickle
+import subprocess
+import shutil
+from sortedcontainers import SortedList
 
 from datetime import datetime
 import numpy as np
 import pandas as pd
+
+from tqdm import tqdm
 
 from ehrs import register_ehr, EHR
 from utils.utils import get_physionet_dataset, get_ccs
@@ -27,36 +34,76 @@ class MIMICIII(EHR):
         self.data_dir = get_physionet_dataset(cfg, physionet_file_path, cache_dir)
         self.ccs_path = get_ccs(cfg, cache_dir)
 
-        postfix = "" if cfg.data_uncompressed else ".gz"
+        self.ext = ".csv.gz"
+        if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 26:
+            self.ext = ".csv"
+            if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 26:
+                raise AssertionError(
+                    "Provided data directory is not correct. Please check if --data is correct. "
+                    "--data: {}".format(self.data_dir)
+                )
 
-        self.icustays = f"ICUSTAYS.csv{postfix}"
-        self.patients = f"PATIENTS.csv{postfix}"
-        self.admissions = f"ADMISSIONS.csv{postfix}"
-        self.diagnoses = f"DIAGNOSES_ICD.csv{postfix}"
+        self.icustays = "ICUSTAYS" + self.ext
+        self.patients = "PATIENTS" + self.ext
+        self.admissions = "ADMISSIONS" + self.ext
+        self.diagnoses = "DIAGNOSES_ICD" + self.ext
 
         # XXX more features? user choice?
         self.features = [
             {
-                "fname": f"LABEVENTS.csv{postfix}",
+                "fname": "LABEVENTS" + self.ext,
                 "type": "lab",
                 "timestamp": "CHARTTIME",
+                "exclude": ["ROW_ID", "SUBJECT_ID"],
+                "code": ["ITEMID"],
+                "desc": ["D_LABITEMS" + self.ext],
+                "desc_key": ["LABEL"],
             },
             {
-                "fname": f"PRESCRIPTIONS.csv{postfix}",
+                "fname": "PRESCRIPTIONS" + self.ext,
                 "type": "med",
                 "timestamp": "STARTDATE",
+                "exclude": ["ENDDATE", "GSN", "NDC", "ROW_ID", "SUBJECT_ID"],
             },
             {
-                "fname": f"INPUTEVENTS_MV.csv{postfix}",
+                "fname": "INPUTEVENTS_MV" + self.ext,
                 "type": "inf",
                 "timestamp": "STARTTIME",
+                "exclude": [
+                    "ENDTIME",
+                    "STORETIME",
+                    "CGID",
+                    "ORDERID",
+                    "LINKORDERID",
+                    "ROW_ID",
+                    "SUBJECT_ID",
+                ],
+                "code": ["ITEMID"],
+                "desc": ["D_ITEMS" + self.ext],
+                "desc_key": ["LABEL"],
             },
             {
-                "fname": f"INPUTEVENTS_CV.csv{postfix}",
+                "fname": "INPUTEVENTS_CV" + self.ext,
                 "type": "inf",
                 "timestamp": "CHARTTIME",
+                "exclude": [
+                    "STORETIME",
+                    "CGID",
+                    "ORDERID",
+                    "LINKORDERID",
+                    "ROW_ID",
+                    "SUBJECT_ID",
+                ],
+                "code": ["ITEMID"],
+                "desc": ["D_ITEMS" + self.ext],
+                "desc_key": ["LABEL"],
             },
         ]
+        # TODO variablize? or leave constants as is
+        self.icustay_key = "ICUSTAY_ID"
+        self.icustay_start_key = "INTIME"
+        self.icustay_end_key = "OUTTIME"
+        self.second_key = "HADM_ID"
 
         self.max_event_size = (
             cfg.max_event_size if cfg.max_event_size is not None else sys.maxsize
@@ -79,6 +126,10 @@ class MIMICIII(EHR):
 
         self.first_icu = cfg.first_icu
 
+        self.chunk_size = cfg.chunk_size
+
+        self.dest = cfg.dest
+
     def build_cohort(self):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patients))
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
@@ -87,11 +138,11 @@ class MIMICIII(EHR):
         icustays = icustays[icustays["FIRST_CAREUNIT"] == icustays["LAST_CAREUNIT"]]
         icustays = icustays[icustays["LOS"] >= (self.obs_size + self.gap_size) / 24]
         icustays = icustays.drop(columns=["ROW_ID"])
-        icustays["INTIME"] = pd.to_datetime(
-            icustays["INTIME"], infer_datetime_format=True
+        icustays[self.icustay_start_key] = pd.to_datetime(
+            icustays[self.icustay_start_key], infer_datetime_format=True
         )
-        icustays["OUTTIME"] = pd.to_datetime(
-            icustays["OUTTIME"], infer_datetime_format=True
+        icustays[self.icustay_end_key] = pd.to_datetime(
+            icustays[self.icustay_end_key], infer_datetime_format=True
         )
 
         patients["DOB"] = pd.to_datetime(patients["DOB"], infer_datetime_format=True)
@@ -114,7 +165,7 @@ class MIMICIII(EHR):
             return age
 
         patients_with_icustays["AGE"] = patients_with_icustays.apply(
-            lambda x: calculate_age(x["DOB"], x["INTIME"]), axis=1
+            lambda x: calculate_age(x["DOB"], x[self.icustay_start_key]), axis=1
         )
         patients_with_icustays = patients_with_icustays[
             (self.min_age <= patients_with_icustays["AGE"])
@@ -146,7 +197,9 @@ class MIMICIII(EHR):
 
             # take the first icustays for each HADM_ID
             patients_with_icustays = patients_with_icustays.loc[
-                patients_with_icustays.groupby("HADM_ID")["INTIME"].idxmin()
+                patients_with_icustays.groupby("HADM_ID")[
+                    self.icustay_start_key
+                ].idxmin()
             ]
             # assign an appropriate label for the readmission task
             patients_with_icustays = patients_with_icustays.join(
@@ -156,7 +209,9 @@ class MIMICIII(EHR):
             patients_with_icustays["readmission"] = 1
             # the last icustay for each HADM_ID means that they have no icu readmission
             patients_with_icustays.loc[
-                patients_with_icustays.groupby("HADM_ID")["INTIME"].idxmax(),
+                patients_with_icustays.groupby("HADM_ID")[
+                    self.icustay_start_key
+                ].idxmax(),
                 "readmission",
             ] = 0
 
@@ -174,6 +229,7 @@ class MIMICIII(EHR):
                 len(self.cohort)
             )
         )
+        patients_with_icustays.to_pickle(os.path.join(self.dest, "mimiciii.cohorts"))
 
         return patients_with_icustays
 
@@ -189,7 +245,12 @@ class MIMICIII(EHR):
         # filter out dead patients
         dead_patients = self.cohort[~self.cohort["DEATHTIME"].isna()]
         dead_patients = dead_patients[
-            ["ICUSTAY_ID", "INTIME", "OUTTIME", "DEATHTIME"]
+            [
+                self.icustay_key,
+                self.icustay_start_key,
+                self.icustay_end_key,
+                "DEATHTIME",
+            ]
         ].copy()
 
         # if intime + obs_size + gap_size <= deathtime <= intime + obs_size + pred_size
@@ -197,7 +258,7 @@ class MIMICIII(EHR):
         is_dead = (
             (
                 (
-                    dead_patients["INTIME"]
+                    dead_patients[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.gap_size, unit="h")
                 )
@@ -206,7 +267,7 @@ class MIMICIII(EHR):
             & (
                 dead_patients["DEATHTIME"]
                 <= (
-                    dead_patients["INTIME"]
+                    dead_patients[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.pred_size, unit="h")
                 )
@@ -216,15 +277,15 @@ class MIMICIII(EHR):
 
         # if icu intime < deathtime <= icu outtime
         # we also retain this case as in_icu_mortality for the imminent discharge task
-        is_dead_in_icu = (dead_patients["DEATHTIME"] > dead_patients["INTIME"]) & (
-            dead_patients["DEATHTIME"] <= dead_patients["OUTTIME"]
-        )
+        is_dead_in_icu = (
+            dead_patients[self.icustay_start_key] < dead_patients["DEATHTIME"]
+        ) & (dead_patients["DEATHTIME"] <= dead_patients[self.icustay_end_key])
         dead_patients["in_icu_mortality"] = np.array(is_dead_in_icu.astype(int))
 
         labeled_cohort = pd.merge(
             labeled_cohort.reset_index(drop=True),
-            dead_patients[["ICUSTAY_ID", "mortality", "in_icu_mortality"]],
-            on="ICUSTAY_ID",
+            dead_patients[[self.icustay_key, "mortality", "in_icu_mortality"]],
+            on=self.icustay_key,
             how="left",
         ).reset_index(drop=True)
         labeled_cohort["mortality"] = labeled_cohort["mortality"].fillna(0).astype(int)
@@ -235,9 +296,14 @@ class MIMICIII(EHR):
         # join with self.cohort to get information needed for imminent discharge task
         labeled_cohort = labeled_cohort.join(
             self.cohort[
-                ["ICUSTAY_ID", "INTIME", "DISCHTIME", "DISCHARGE_LOCATION"]
+                [
+                    self.icustay_key,
+                    self.icustay_start_key,
+                    "DISCHTIME",
+                    "DISCHARGE_LOCATION",
+                ]
             ].set_index("ICUSTAY_ID"),
-            on="ICUSTAY_ID",
+            on=self.icustay_key,
         )
 
         # if an icustay is DEAD/EXPIRED, but not in_icu_mortality, then it is in_hospital_mortality
@@ -268,7 +334,7 @@ class MIMICIII(EHR):
         is_discharged = (
             (
                 (
-                    labeled_cohort["INTIME"]
+                    labeled_cohort[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.gap_size, unit="h")
                 )
@@ -277,7 +343,7 @@ class MIMICIII(EHR):
             & (
                 labeled_cohort["DISCHTIME"]
                 <= (
-                    labeled_cohort["INTIME"]
+                    labeled_cohort[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.pred_size, unit="h")
                 )
@@ -303,11 +369,11 @@ class MIMICIII(EHR):
         # drop unnecessary columns
         labeled_cohort = labeled_cohort.drop(
             columns=[
+                self.icustay_start_key,
                 "in_icu_mortality",
-                "INTIME",
+                "in_hospital_mortality",
                 "DISCHTIME",
                 "DISCHARGE_LOCATION",
-                "in_hospital_mortality",
             ]
         )
 
@@ -323,9 +389,7 @@ class MIMICIII(EHR):
         labeled_cohort = labeled_cohort.join(diagnoses_with_cohort, on="HADM_ID")
 
         ccs_dx = pd.read_csv(self.ccs_path)
-        ccs_dx["'ICD-9-CM CODE'"] = (
-            ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.replace(" ", "")
-        )
+        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
         ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
         lvl1 = {
             x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
@@ -335,20 +399,152 @@ class MIMICIII(EHR):
         labeled_cohort["diagnosis"] = labeled_cohort["ICD9_CODE"].map(
             lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
         )
-
         labeled_cohort.dropna(subset=["diagnosis"], inplace=True)
         labeled_cohort = labeled_cohort.drop(columns=["ICD9_CODE"])
 
         self.labeled_cohort = labeled_cohort
-        logger.info("Done preparing tasks given the cohort sets")
+        logger.info("Done preparing tasks for the given cohorts")
+
+        labeled_cohort.to_pickle(os.path.join(self.dest, "mimiciii.cohorts.labeled"))
 
         return labeled_cohort
 
-    def encode(self):
-        encoded_cohort = self.labeled_cohort.rename(
-            columns={"HADM_ID": "ID"}, inplace=False
+    def prepare_events(self):
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+        icustays[self.icustay_start_key] = pd.to_datetime(
+            icustays[self.icustay_start_key], infer_datetime_format=True
         )
-        # TODO resume here
+        icustays[self.icustay_end_key] = pd.to_datetime(
+            icustays[self.icustay_end_key], infer_datetime_format=True
+        )
+        icustays_by_second_key = icustays.groupby(self.second_key)[
+            self.icustay_key
+        ].apply(list)
+        icustay_to_intime = dict(
+            zip(icustays[self.icustay_key], icustays[self.icustay_start_key])
+        )
+        icustay_to_outtime = dict(
+            zip(icustays[self.icustay_key], icustays[self.icustay_end_key])
+        )
+
+        icustay_events = {
+            id: SortedList() for id in self.labeled_cohort[self.icustay_key].to_list()
+        }
+
+        for feat in self.features:
+            fname = feat["fname"]
+            timestamp_key = feat["timestamp"]
+            excludes = feat["exclude"]
+            code_to_descriptions = None
+            if "code" in feat:
+                code_to_descriptions = {
+                    k: pd.read_csv(os.path.join(self.data_dir, v))
+                    for k, v in zip(feat["code"], feat["desc"])
+                }
+                code_to_descriptions = {
+                    k: dict(zip(v[k], v[d_k]))
+                    for (k, v), d_k in zip(
+                        code_to_descriptions.items(), feat["desc_key"]
+                    )
+                }
+
+            infer_icustay_from_second_key = False
+            columns = pd.read_csv(
+                os.path.join(self.data_dir, fname), index_col=0, nrows=0
+            ).columns.to_list()
+            if self.icustay_key not in columns:
+                infer_icustay_from_second_key = True
+                if self.second_key not in columns:
+                    raise AssertionError(
+                        "{} doesn't have one of these columns: {}".format(
+                            fname, [self.icustay_key, self.second_key]
+                        )
+                    )
+
+            chunks = pd.read_csv(
+                os.path.join(self.data_dir, fname), chunksize=self.chunk_size
+            )
+            for events in tqdm(chunks):
+                events[timestamp_key] = pd.to_datetime(
+                    events[timestamp_key], infer_datetime_format=True
+                )
+                events = events.drop(columns=excludes)
+                if infer_icustay_from_second_key:
+                    events = events[~events[self.second_key].isna()]
+                else:
+                    events = events[~events[self.icustay_key].isna()]
+
+                for _, event in events.iterrows():
+                    charttime = event[timestamp_key]
+                    if infer_icustay_from_second_key:
+                        if event[self.second_key] not in icustays_by_second_key:
+                            continue
+
+                        # infer icustay id for the event based on `self.second_key`
+                        second_key_icustays = icustays_by_second_key[
+                            event[self.second_key]
+                        ]
+                        for icustay_id in second_key_icustays:
+                            intime = icustay_to_intime[icustay_id]
+                            outtime = icustay_to_outtime[icustay_id]
+                            if intime <= charttime and charttime <= outtime:
+                                event[self.icustay_key] = icustay_id
+                                break
+
+                        # which means that the event has no corresponding icustay
+                        if self.icustay_key not in event:
+                            continue
+                    else:
+                        intime = icustay_to_intime[event[self.icustay_key]]
+                        outtime = icustay_to_outtime[event[self.icustay_key]]
+                        # which means that the event has been charted before / after the icustay
+                        if not (intime <= charttime and charttime <= outtime):
+                            continue
+
+                    icustay_id = event[self.icustay_key]
+                    if icustay_id in icustay_events:
+                        event = event.drop(
+                            labels=[self.icustay_key, self.second_key, timestamp_key]
+                        )
+                        event_string = []
+                        # TODO check which embedding strategy is adopted, desc-based or code-based
+                        for name, val in event.to_dict().items():
+                            if pd.isna(val):
+                                continue
+                            # convert code to description if needed
+                            if (
+                                code_to_descriptions is not None
+                                and name in code_to_descriptions
+                            ):
+                                val = code_to_descriptions[name][val]
+                            val = str(val)
+                            event_string.append(" ".join([name, val]))
+                        event_string = " ".join(event_string)
+
+                        icustay_events[icustay_id].add(
+                            (charttime, fname[: -len(self.ext)], event_string)
+                        )
+        # TODO put time-gap
+        """
+        2. based on the sorted list, define time offset --> (TABLE_NAME, events_string, time-gap)
+        """
+
+        self.cohort_events = icustay_events
+
+        logger.info("Done preparing events for the given labeled cohorts.")
+
+        with open(
+            os.path.join(self.dest, "mimiciii.cohorts.labeled.events"), "wb"
+        ) as f:
+            pickle.dump(icustay_events, f)
+
+        return icustay_events
+
+    def encode_events(self):
+        """
+        encode event strings
+        """
+        pass
 
     # def run_pipeline(self):
     #     ...

@@ -87,11 +87,19 @@ def get_parser():
         action="store_true",
         help="whether the data is uncompressed or not",
     )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=1024,
+        help="chunk size to read large csv files",
+    )
+
     return parser
 
 
 def main(args):
     task = args.task
+
 
 if __name__ == "__main__":
     parser = get_parser()
