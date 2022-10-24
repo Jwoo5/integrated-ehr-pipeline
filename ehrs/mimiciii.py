@@ -22,12 +22,8 @@ logger = logging.getLogger(__name__)
 @register_ehr("mimiciii")
 class MIMICIII(EHR):
     def __init__(self, cfg):
-        super().__init__()
-        self.cfg = cfg
-
-        self.data_dir = cfg.data
-        self.ccs_path = cfg.ccs
-
+        super().__init__(cfg)
+        
         cache_dir = os.path.expanduser("~/.cache/ehr")
         physionet_file_path = "mimiciii/1.4/"
 
@@ -105,31 +101,6 @@ class MIMICIII(EHR):
         self.icustay_end_key = "OUTTIME"
         self.second_key = "HADM_ID"
 
-        self.max_event_size = (
-            cfg.max_event_size if cfg.max_event_size is not None else sys.maxsize
-        )
-        self.min_event_size = (
-            cfg.min_event_size if cfg.min_event_size is not None else 0
-        )
-        assert self.min_event_size <= self.max_event_size, (
-            self.min_event_size,
-            self.max_event_size,
-        )
-
-        self.max_age = cfg.max_age if cfg.max_age is not None else sys.maxsize
-        self.min_age = cfg.min_age if cfg.min_age is not None else 0
-        assert self.min_age <= self.max_age, (self.min_age, self.max_age)
-
-        self.obs_size = cfg.obs_size
-        self.gap_size = cfg.gap_size
-        self.pred_size = cfg.pred_size
-
-        self.first_icu = cfg.first_icu
-
-        self.chunk_size = cfg.chunk_size
-
-        self.dest = cfg.dest
-
     def build_cohort(self):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patients))
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
@@ -180,40 +151,7 @@ class MIMICIII(EHR):
             on="HADM_ID",
         )
 
-        # we define labels for the readmission task in this step
-        # since it requires to observe each next icustays,
-        # which would have been excluded in the final cohorts
-        if self.first_icu:
-            # check if each HADM_ID has multiple icustays
-            is_readmitted = patients_with_icustays.groupby("HADM_ID")[
-                "ICUSTAY_ID"
-            ].count()
-            is_readmitted = (
-                (is_readmitted > 1)
-                .astype(int)
-                .to_frame()
-                .rename(columns={"ICUSTAY_ID": "readmission"})
-            )
-
-            # take the first icustays for each HADM_ID
-            patients_with_icustays = patients_with_icustays.loc[
-                patients_with_icustays.groupby("HADM_ID")[
-                    self.icustay_start_key
-                ].idxmin()
-            ]
-            # assign an appropriate label for the readmission task
-            patients_with_icustays = patients_with_icustays.join(
-                is_readmitted, on="HADM_ID"
-            )
-        else:
-            patients_with_icustays["readmission"] = 1
-            # the last icustay for each HADM_ID means that they have no icu readmission
-            patients_with_icustays.loc[
-                patients_with_icustays.groupby("HADM_ID")[
-                    self.icustay_start_key
-                ].idxmax(),
-                "readmission",
-            ] = 0
+        patients_with_icustays = self.readmission_label(patients_with_icustays)
 
         patients_with_icustays["DEATHTIME"] = pd.to_datetime(
             patients_with_icustays["DEATHTIME"], infer_datetime_format=True

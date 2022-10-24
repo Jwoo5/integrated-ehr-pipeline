@@ -1,11 +1,9 @@
 import os
 import sys
 import logging
-
-from datetime import datetime
 import numpy as np
 import pandas as pd
-
+import glob
 from ehrs import register_ehr, EHR
 from utils.utils import get_physionet_dataset, get_ccs, get_gem
 
@@ -15,12 +13,7 @@ logger = logging.getLogger(__name__)
 @register_ehr("mimiciv")
 class MIMICIV(EHR):
     def __init__(self, cfg):
-        super().__init__()
-        self.cfg = cfg
-
-        self.data_dir = cfg.data
-        self.ccs_path = cfg.ccs
-        self.gem_path = cfg.gem
+        super().__init__(cfg)
 
         cache_dir = os.path.expanduser("~/.cache/ehr")
         physionet_file_path = "mimiciv/2.0/"
@@ -29,49 +22,74 @@ class MIMICIV(EHR):
         self.ccs_path = get_ccs(cfg, cache_dir)
         self.gem_path = get_gem(cfg, cache_dir)
 
-        postfix = "" if cfg.data_uncompressed else ".gz"
-
-        self.icustays = f"icu/icustays.csv{postfix}"
-        self.patients = f"hosp/patients.csv{postfix}"
-        self.admissions = f"hosp/admissions.csv{postfix}"
-        self.diagnoses = f"hosp/diagnoses_icd.csv{postfix}"
+        self.ext = ".csv.gz"
+        if (
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*" + self.ext))) != 22
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*" + self.ext))) != 9
+        ):
+            self.ext = ".csv"
+            if (
+                len(glob.glob(os.path.join(self.data_dir, "hosp", "*" + self.ext)))
+                != 22
+                or len(glob.glob(os.path.join(self.data_dir, "icu", "*" + self.ext)))
+                != 9
+            ):
+                raise AssertionError(
+                    "Provided data directory is not correct. Please check if --data is correct. "
+                    "--data: {}".format(self.data_dir)
+                )
+        self.icustays = "icu/icustays" + self.ext
+        self.patients = "hosp/patients" + self.ext
+        self.admissions = "hosp/admissions" + self.ext
+        self.diagnoses = "hosp/diagnoses_icd" + self.ext
 
         self.features = [
             {
-                "fname": f"hosp/labevents.csv{postfix}",
+                "fname": "hosp/labevents" + self.ext,
                 "type": "lab",
                 "timestamp": "charttime",
+                "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id"],
+                "code": ["itemid"],
+                "desc": ["hosp/d_labitems" + self.ext],
+                "desc_key": ["label"],
             },
             {
-                "fname": f"hosp/prescriptions.csv{postfix}",
+                "fname": "hosp/prescriptions" + self.ext,
                 "type": "med",
                 "timestamp": "starttime",
+                "exclude": [
+                    "gsn",
+                    "ndc",
+                    "subject_id",
+                    "pharmacy_id",
+                    "poe_id",
+                    "poe_seq",
+                    "formulary_drug_cd",
+                    "stoptime",
+                ],
             },
             {
-                "fname": f"icu/inputevents.csv{postfix}",
+                "fname": "icu/inputevents" + self.ext,
                 "type": "inf",
                 "timestamp": "charttime",
+                "exclude": [
+                    "endtime",
+                    "storetime" "orderid",
+                    "linkorderid",
+                    "subject_id",
+                    "continueinnextdept",
+                    "statusdescription",
+                ],
+                "code": ["itemid"],
+                "desc": ["icu/d_items" + self.ext],
+                "desc_key": ["label"],
             },
         ]
 
-        self.max_event_size = (
-            cfg.max_event_size if cfg.max_event_size is not None else sys.maxsize
-        )
-        self.min_event_size = (
-            cfg.min_event_size if cfg.min_event_size is not None else 0
-        )
-        assert self.min_event_size <= self.max_event_size, (
-            self.min_event_size,
-            self.max_event_size,
-        )
-
-        self.max_age = cfg.max_age if cfg.max_age is not None else sys.maxsize
-        self.min_age = cfg.min_age if cfg.min_age is not None else 0
-        assert self.min_age <= self.max_age, (self.min_age, self.max_age)
-
-        self.obs_size = cfg.obs_size
-        self.gap_size = cfg.gap_size
-        self.pred_size = cfg.pred_size
+        self.icustay_key = "stay_id"
+        self.icustay_start_key = "intime"
+        self.icustay_end_key = "outtime"
+        self.second_key = "hadm_id"
 
     def build_cohort(self):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patients))
@@ -80,38 +98,49 @@ class MIMICIV(EHR):
 
         icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
         icustays = icustays[icustays["los"] >= (self.obs_size + self.gap_size) / 24]
-        icustays["intime"] = pd.to_datetime(icustays["intime"])
-        icustays["outtime"] = pd.to_datetime(icustays["outtime"])
+        icustays[self.icustay_start_key] = pd.to_datetime(
+            icustays[self.icustay_start_key]
+        )
+        icustays[self.icustay_end_key] = pd.to_datetime(icustays[self.icustay_end_key])
 
         patients_with_icustays = icustays.merge(patients, on="subject_id", how="left")
         patients_with_icustays["age"] = (
-            patients_with_icustays["intime"].dt.year
+            patients_with_icustays[self.icustay_start_key].dt.year
             - patients_with_icustays["anchor_year"]
             + patients_with_icustays["anchor_age"]
         )
 
-        patients_with_icustays["readmission"] = 1
-        # the last icustay for each HADM_ID means that they have no icu readmission
-        patients_with_icustays.loc[
-            patients_with_icustays.groupby("hadm_id")["intime"].idxmax(), "readmission"
-        ] = 0
+        patients_with_icustays = patients_with_icustays[
+            (self.min_age <= patients_with_icustays["age"])
+            & (patients_with_icustays["age"] <= self.max_age)
+        ]
 
-        cohort = patients_with_icustays.merge(
-            admissions[["hadm_id", "discharge_location", "deathtime", "dischtime"]],
+        patients_with_icustays = patients_with_icustays.merge(
+            admissions[
+                [self.second_key, "discharge_location", "deathtime", "dischtime"]
+            ],
             how="left",
-            on="hadm_id",
+            on=self.second_key,
         )
-        cohort["deathtime"] = pd.to_datetime(cohort["deathtime"])
-        cohort["dischtime"] = pd.to_datetime(cohort["dischtime"])
 
-        self.cohort = cohort
+        patients_with_icustays = self.readmission_label(patients_with_icustays)
+
+        patients_with_icustays["deathtime"] = pd.to_datetime(
+            patients_with_icustays["deathtime"]
+        )
+        patients_with_icustays["dischtime"] = pd.to_datetime(
+            patients_with_icustays["dischtime"]
+        )
+
+        self.cohort = patients_with_icustays
         logger.info(
             "cohort has been built successfully. loaded {} cohorts.".format(
                 len(self.cohort)
             )
         )
+        patients_with_icustays.to_pickle(os.path.join(self.dest, "mimiciii.cohorts"))
 
-        return cohort
+        return patients_with_icustays
 
     def prepare_tasks(self):
         # readmission prediction
@@ -126,7 +155,7 @@ class MIMICIV(EHR):
         labeled_cohort["mortality"] = (
             (
                 (
-                    labeled_cohort["intime"]
+                    labeled_cohort[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.gap_size, unit="h")
                 )
@@ -135,7 +164,7 @@ class MIMICIV(EHR):
             & (
                 labeled_cohort["deathtime"]
                 <= (
-                    labeled_cohort["intime"]
+                    labeled_cohort[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.pred_size, unit="h")
                 )
@@ -143,8 +172,12 @@ class MIMICIV(EHR):
         ).astype(int)
 
         labeled_cohort["in_icu_mortality"] = (
-            labeled_cohort["deathtime"] > labeled_cohort["intime"]
-        ) & (labeled_cohort["deathtime"] <= labeled_cohort["outtime"]).astype(int)
+            labeled_cohort["deathtime"] > labeled_cohort[self.icustay_start_key]
+        ) & (
+            labeled_cohort["deathtime"] <= labeled_cohort[self.icustay_end_key]
+        ).astype(
+            int
+        )
 
         # if an icustay is DEAD/EXPIRED, but not in_icu_mortality, then it is in_hospital_mortality
         labeled_cohort["in_hospital_mortality"] = 0
@@ -174,7 +207,7 @@ class MIMICIV(EHR):
         is_discharged = (
             (
                 (
-                    labeled_cohort["intime"]
+                    labeled_cohort[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.gap_size, unit="h")
                 )
@@ -183,7 +216,7 @@ class MIMICIV(EHR):
             & (
                 labeled_cohort["dischtime"]
                 <= (
-                    labeled_cohort["intime"]
+                    labeled_cohort[self.icustay_start_key]
                     + pd.Timedelta(self.obs_size, unit="h")
                     + pd.Timedelta(self.pred_size, unit="h")
                 )
@@ -210,8 +243,8 @@ class MIMICIV(EHR):
         # drop unnecessary columns
         labeled_cohort = labeled_cohort.drop(
             columns=[
+                self.icustay_start_key,
                 "in_icu_mortality",
-                "intime",
                 "dischtime",
                 "discharge_location",
                 "in_hospital_mortality",
@@ -223,26 +256,25 @@ class MIMICIV(EHR):
 
         dx = self.icd10toicd9(dx)
 
-        diagnoses_with_cohort = dx[dx["hadm_id"].isin(labeled_cohort["hadm_id"])]
+        diagnoses_with_cohort = dx[
+            dx[self.second_key].isin(labeled_cohort[self.second_key])
+        ]
         diagnoses_with_cohort = (
-            diagnoses_with_cohort.groupby("hadm_id")["icd_code_converted"]
+            diagnoses_with_cohort.groupby(self.second_key)["icd_code_converted"]
             .apply(list)
             .to_frame()
         )
         labeled_cohort = labeled_cohort.join(
-            diagnoses_with_cohort, on="hadm_id", how="left"
+            diagnoses_with_cohort, on=self.second_key, how="left"
         )
 
         ccs_dx = pd.read_csv(self.ccs_path)
-        ccs_dx["'ICD-9-CM CODE'"] = (
-            ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.replace(" ", "")
-        )
+        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
         ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
         lvl1 = {
             x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
         }
 
-        dx1_list = []
         # Some of patients(21) does not have dx codes
         labeled_cohort.dropna(subset=["icd_code_converted"], inplace=True)
 
@@ -250,7 +282,6 @@ class MIMICIV(EHR):
             lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
         )
 
-        # XXX what does this line do?
         labeled_cohort = labeled_cohort.drop(columns=["icd_code_converted"])
         labeled_cohort.dropna(subset=["diagnosis"], inplace=True)
 
@@ -261,7 +292,7 @@ class MIMICIV(EHR):
 
     def encode(self):
         encoded_cohort = self.labeled_cohort.rename(
-            columns={"hadm_id": "id"}, inplace=False
+            columns={self.second_key: "id"}, inplace=False
         )
         # todo resume here
 
