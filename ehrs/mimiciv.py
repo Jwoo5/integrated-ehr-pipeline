@@ -1,11 +1,8 @@
 import os
-import sys
 import logging
-import numpy as np
 import pandas as pd
 import glob
 from ehrs import register_ehr, EHR
-from utils.utils import get_physionet_dataset, get_ccs, get_gem
 
 logger = logging.getLogger(__name__)
 
@@ -18,21 +15,21 @@ class MIMICIV(EHR):
         cache_dir = os.path.expanduser("~/.cache/ehr")
         physionet_file_path = "mimiciv/2.0/"
 
-        self.data_dir = get_physionet_dataset(cfg, physionet_file_path, cache_dir)
-        self.ccs_path = get_ccs(cfg, cache_dir)
-        self.gem_path = get_gem(cfg, cache_dir)
+        self.data_dir = self.get_physionet_dataset(physionet_file_path, cache_dir)
+        self.ccs_path = self.get_ccs(cache_dir)
+        self.gem_path = self.get_gem(cache_dir)
 
         self.ext = ".csv.gz"
         if (
-            len(glob.glob(os.path.join(self.data_dir, "hosp", "*" + self.ext))) != 22
-            or len(glob.glob(os.path.join(self.data_dir, "icu", "*" + self.ext))) != 9
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*" + self.ext))) != 21
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*" + self.ext))) != 8
         ):
             self.ext = ".csv"
             if (
                 len(glob.glob(os.path.join(self.data_dir, "hosp", "*" + self.ext)))
-                != 22
+                != 21
                 or len(glob.glob(os.path.join(self.data_dir, "icu", "*" + self.ext)))
-                != 9
+                != 8
             ):
                 raise AssertionError(
                     "Provided data directory is not correct. Please check if --data is correct. "
@@ -138,7 +135,7 @@ class MIMICIV(EHR):
                 len(self.cohort)
             )
         )
-        patients_with_icustays.to_pickle(os.path.join(self.dest, "mimiciii.cohorts"))
+        patients_with_icustays.to_pickle(os.path.join(self.dest, "mimiciv.cohorts"))
 
         return patients_with_icustays
 

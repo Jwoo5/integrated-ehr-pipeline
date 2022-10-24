@@ -3,7 +3,8 @@ import logging
 import pandas as pd
 import glob
 from ehrs import register_ehr, EHR
-from utils.utils import get_physionet_dataset, get_ccs, get_gem
+import treelib
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +17,18 @@ class eICU(EHR):
         cache_dir = os.path.expanduser("~/.cache/ehr")
         physionet_file_path = "eicu-crd/2.0"
 
-        self.data_dir = get_physionet_dataset(cfg, physionet_file_path, cache_dir)
-        self.ccs_path = get_ccs(cfg, cache_dir)
-        self.gem_path = get_gem(cfg, cache_dir)
+        self.data_dir = self.get_physionet_dataset(physionet_file_path, cache_dir)
+        self.ccs_path = self.get_ccs(cache_dir)
+        self.gem_path = self.get_gem(cache_dir)
 
-        self.ext = ".csv"
-        # self.ext = ".csv.gz"
-        # if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 33:
-        #     self.ext = ".csv"
-        #     if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 33:
-        #         raise AssertionError(
-        #             "Provided data directory is not correct. Please check if --data is correct. "
-        #             "--data: {}".format(self.data_dir)
-        #         )
+        self.ext = ".csv.gz"
+        if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 31:
+            self.ext = ".csv"
+            if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 31:
+                raise AssertionError(
+                    "Provided data directory is not correct. Please check if --data is correct. "
+                    "--data: {}".format(self.data_dir)
+                )
         self.icustays = f"patient" + self.ext
         self.diagnoses = f"diagnosis" + self.ext
 
@@ -83,7 +83,7 @@ class eICU(EHR):
                 len(self.cohort)
             )
         )
-        icustays.to_pickle(os.path.join(self.dest, "mimiciii.cohorts"))
+        icustays.to_pickle(os.path.join(self.dest, "eicu.cohorts"))
 
         return icustays
 
@@ -169,28 +169,27 @@ class eICU(EHR):
             ]
         )
 
-        str2cat = self.make_dx_mapping(labeled_cohort)
+        str2cat = self.make_dx_mapping()
         dx = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
-        labeled_cohort = labeled_cohort.merge(
-            dx[[self.icustay_key, "diagnosisstring"]], on=self.icustay_key, how="left"
+        dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
+        dx = dx[dx["diagnosis"] != -1]
+        dx = (
+            dx[[self.icustay_key, "diagnosis"]]
+            .groupby(self.icustay_key)
+            .agg(list)
+            .reset_index()
         )
-        # label should be 0-base
-        labeled_cohort["diagnosis"] = labeled_cohort["diagnosisstring"].map(
-            lambda x: int(str2cat.get(x, 0)) - 1
-        )
-        labeled_cohort = labeled_cohort[labeled_cohort["diagnosis"] != -1]
-        labeled_cohort.drop(columns=["diagnosisstring"], inplace=True)
+        labeled_cohort = labeled_cohort.merge(dx, on=self.icustay_key, how="left")
+        labeled_cohort.dropna(subset=["diagnosis"], inplace=True)
 
         return labeled_cohort
 
-    def make_dx_mapping(self, cohort):
+    def make_dx_mapping(self):
         diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
         ccs_dx = pd.read_csv(self.ccs_path)
         gem = pd.read_csv(self.gem_path)
 
-        diagnosis = diagnosis[
-            diagnosis[self.icustay_key].isin(cohort[self.icustay_key])
-        ][["diagnosisstring", "icd9code"]]
+        diagnosis = diagnosis[["diagnosisstring", "icd9code"]]
 
         # 1 to 1 matching btw str and code
         # STR: diagnosisstring, CODE: icd9/10 code, CAT:category
@@ -206,7 +205,7 @@ class eICU(EHR):
         # 이거 하면 dxstring duplicated 자동 제거됨 ->x
 
         ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
-        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
+        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1].astype(int) - 1
         icd2cat = dict(zip(ccs_dx["'ICD-9-CM CODE'"], ccs_dx["'CCS LVL 1'"]))
 
         # 2. if code is not icd9, convert it to icd9
@@ -237,24 +236,48 @@ class eICU(EHR):
             if v in icd2cat.keys():
                 cat = icd2cat[v]
                 if k in str2cat.keys() and str2cat[k] != cat:
-                    print(f"Warning: {k} has multiple categories{cat, str2cat[k]}")
+                    logger.warning(f"{k} has multiple categories{cat, str2cat[k]}")
                 str2cat[k] = icd2cat[v]
             elif v in icd102icd9.keys():
                 cat = icd2cat[icd102icd9[v]]
                 if k in str2cat.keys() and str2cat[k] != cat:
-                    print(f"Warning: {k} has multiple categories{cat, str2cat[k]}")
+                    logger.warning(f"{k} has multiple categories{cat, str2cat[k]}")
                 str2cat[k] = icd2cat[icd102icd9[v]]
-        print(len(str2cat))
 
         # 4. If no available category by mapping(~25%), use diagnosisstring hierarchy
+
+        # Make tree structure
+        tree = treelib.Tree()
+        tree.create_node("root", "root")
+        for dx, cat in str2cat.items():
+            dx = dx.split("|")
+            if not tree.contains(dx[0]):
+                tree.create_node(-1, dx[0], parent="root")
+            for i in range(2, len(dx)):
+                if not tree.contains("|".join(dx[:i])):
+                    tree.create_node(-1, "|".join(dx[:i]), parent="|".join(dx[: i - 1]))
+            if not tree.contains("|".join(dx)):
+                tree.create_node(cat, "|".join(dx), parent="|".join(dx[:-1]))
+
+        # Update non-leaf nodes with majority vote
+        nid_list = list(tree.expand_tree(mode=treelib.Tree.DEPTH))
+        nid_list.reverse()
+        for nid in nid_list:
+            if tree.get_node(nid).is_leaf():
+                continue
+            elif tree.get_node(nid).tag == -1:
+                tree.get_node(nid).tag = Counter(
+                    [child.tag for child in tree.children(nid)]
+                ).most_common(1)[0][0]
+
+        # Evaluate dxs without category
         unmatched_dxs = set(diagnosis["diagnosisstring"]) - set(str2cat.keys())
         for dx in unmatched_dxs:
-            for i in range(len(dx.split("|")), 0, -1):
-                _dx = "|".join(dx.split("|")[:i])
-                if _dx in str2cat.keys():
-                    str2cat[dx] = str2cat[_dx]
+            dx = dx.split("|")
+            # Do not go to root level(can add noise)
+            for i in range(len(dx) - 1, 1, -1):
+                if tree.contains("|".join(dx[:i])):
+                    str2cat["|".join(dx)] = tree.get_node("|".join(dx[:i])).tag
                     break
-
-        print(len(str2cat))
 
         return str2cat

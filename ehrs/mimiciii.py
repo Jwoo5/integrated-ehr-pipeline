@@ -1,10 +1,7 @@
 import os
-import sys
 import logging
 import glob
 import pickle
-import subprocess
-import shutil
 from sortedcontainers import SortedList
 
 from datetime import datetime
@@ -14,7 +11,6 @@ import pandas as pd
 from tqdm import tqdm
 
 from ehrs import register_ehr, EHR
-from utils.utils import get_physionet_dataset, get_ccs
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +19,12 @@ logger = logging.getLogger(__name__)
 class MIMICIII(EHR):
     def __init__(self, cfg):
         super().__init__(cfg)
-        
+
         cache_dir = os.path.expanduser("~/.cache/ehr")
         physionet_file_path = "mimiciii/1.4/"
 
-        self.data_dir = get_physionet_dataset(cfg, physionet_file_path, cache_dir)
-        self.ccs_path = get_ccs(cfg, cache_dir)
+        self.data_dir = self.get_physionet_dataset(physionet_file_path, cache_dir)
+        self.ccs_path = self.get_ccs(cache_dir)
 
         self.ext = ".csv.gz"
         if len(glob.glob(os.path.join(self.data_dir, "*" + self.ext))) != 26:
