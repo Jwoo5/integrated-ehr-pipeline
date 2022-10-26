@@ -1,21 +1,250 @@
 import os
-import sys
+import glob
 import logging
-from datetime import datetime
 
-import numpy as np
 import pandas as pd
+import numpy as np
 
 from ehrs import register_ehr, EHR
-from utils import utils
 
 logger = logging.getLogger(__name__)
 
-@register_ehr('mimiciv')
+@register_ehr("mimiciv")
 class MIMICIV(EHR):
-    def __init__(self, data, cfg):
-        super().__init__()
-        self.cfg = cfg
+    def __init__(self, cfg):
+        super().__init__(cfg)
 
-        self.dir_path = data
-        
+        self.obs_size = pd.Timedelta(self.obs_size, unit="h")
+        self.gap_size = pd.Timedelta(self.gap_size, unit="h")
+        self.pred_size = pd.Timedelta(self.pred_size, unit="h")
+
+        self.ehr_name = "mimiciv"
+
+        if self.data_dir is None:
+            self.data_dir = os.path.join(self.cache_dir, self.ehr_name)
+
+            if not os.path.exists(self.data_dir):
+                logger.info(
+                    "Data is not found so try to download from the internet. "
+                    "Note that this is a restricted-access resource. "
+                    "Please log in to physionet.org with a credentialed user."
+                )
+                self.download_ehr_from_url(
+                    url="https://physionet.org/files/mimiciv/2.0/",
+                    dest=self.data_dir
+                )
+
+        logger.info("Data directory is set to {}".format(self.data_dir))
+
+        if self.ccs_path is None:
+            self.ccs_path = os.path.join(self.cache_dir, "ccs_multi_dx_tool_2015.csv")
+
+            if not os.path.exists(self.ccs_path):
+                logger.info(
+                    "`ccs_multi_dx_tool_2015.csv` is not found so try to download from the internet."
+                )
+                self.download_ccs_from_url(self.cache_dir)
+
+        if self.gem_path is None:
+            self.gem_path = os.path.join(self.cache_dir, "icd10cmtoicd9gem.csv")
+
+            if not os.path.exists(self.gem_path):
+                logger.info(
+                    "`icd10cmtoicd9gem.csv` is not found so try to download from the internet."
+                )
+                self.download_icdgem_from_url(self.cache_dir)
+
+        if self.ext is None:
+            self.ext = self.infer_data_extension()
+
+        self.icustays = "icustays" + self.ext
+        self.patients = "patients" + self.ext
+        self.admissions = "admissions" + self.ext
+        self.diagnoses = "diagnoses_icd" + self.ext
+
+        self.features = [
+            {
+                "fname": "labevents" + self.ext,
+                "type": "lab",
+                "timestamp": "charttime",
+                "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id"],
+                "code": ["itemid"],
+                "desc": ["d_labitems" + self.ext],
+                "desc_key": ["label"],
+            },
+            {
+                "fname": "prescriptions" + self.ext,
+                "type": "med",
+                "timestamp": "starttime",
+                "exclude": [
+                    "gsn",
+                    "ndc",
+                    "subject_id",
+                    "pharmacy_id",
+                    "poe_id",
+                    "poe_seq",
+                    "formulary_drug_cd",
+                    "stoptime",
+                ],
+            },
+            {
+                "fname": "inputevents" + self.ext,
+                "type": "inf",
+                "timestamp": "charttime",
+                "exclude": [
+                    "endtime",
+                    "storetime" "orderid",
+                    "linkorderid",
+                    "subject_id",
+                    "continueinnextdept",
+                    "statusdescription",
+                ],
+                "code": ["itemid"],
+                "desc": ["d_items" + self.ext],
+                "desc_key": ["label"],
+            },
+        ]
+
+        self.icustay_key = "stay_id"
+        self.hadm_key = "hadm_id"
+
+    def build_cohorts(self, cached=False):
+        patients = pd.read_csv(os.path.join(self.data_dir, self.patients))
+        admissions = pd.read_csv(os.path.join(self.data_dir, self.admissions))
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+
+        # prepare icustays according to the appropriate format
+        icustays = icustays.rename(columns={
+            "los": "LOS",
+            "intime": "INTIME",
+            "outtime": "OUTTIME",
+        })
+        admissions = admissions.rename(columns={
+            "dischtime": "DISCHTIME",
+        })
+
+        icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
+        icustays["INTIME"] = pd.to_datetime(
+            icustays["INTIME"], infer_datetime_format=True
+        )
+        icustays["OUTTIME"] = pd.to_datetime(
+            icustays["OUTTIME"], infer_datetime_format=True
+        )
+
+        icustays = icustays.merge(patients, on="subject_id", how="left")
+        icustays["AGE"] = (
+            icustays["INTIME"].dt.year
+            - icustays["anchor_year"]
+            + icustays["anchor_age"]
+        )
+
+        icustays = icustays.merge(
+            admissions[
+                [self.hadm_key, "discharge_location", "deathtime", "DISCHTIME"]
+            ],
+            how="left",
+            on=self.hadm_key,
+        )
+
+        icustays["discharge_location"].replace("DIED", "Death", inplace=True)
+        icustays["DISCHTIME"] = pd.to_datetime(
+            icustays["DISCHTIME"], infer_datetime_format=True
+        )
+
+        icustays["ICU_DISCHARGE_LOCATION"] = np.nan
+        is_discharged_in_icu = (
+            (icustays["INTIME"] < icustays["DISCHTIME"])
+            & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
+        )
+        icustays.loc[
+            is_discharged_in_icu, "ICU_DISCHARGE_LOCATION"
+        ] = icustays.loc[is_discharged_in_icu, "discharge_location"]
+        icustays.loc[
+            ~is_discharged_in_icu, "HOS_DISCHARGE_LOCATION"
+        ] = icustays.loc[~is_discharged_in_icu, "discharge_location"]
+
+        cohorts = super().build_cohorts(icustays, cached=cached)
+
+        return cohorts
+
+    def prepare_tasks(self, cohorts=None, cached=False):
+        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+
+        # define diagnosis prediction task
+        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
+
+        diagnoses = self.icd10toicd9(diagnoses)
+
+        diagnoses_with_cohorts = diagnoses[
+            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
+        ]
+        diagnoses_with_cohorts = (
+            diagnoses_with_cohorts.groupby(self.hadm_key)["icd_code_converted"]
+            .apply(list)
+            .to_frame()
+        )
+        labeled_cohorts = labeled_cohorts.join(
+            diagnoses_with_cohorts, on=self.hadm_key, how="left"
+        )
+
+        ccs_dx = pd.read_csv(self.ccs_path)
+        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
+        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
+        lvl1 = {
+            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+        }
+
+        # Some of patients(21) does not have dx codes
+        labeled_cohorts.dropna(subset=["icd_code_converted"], inplace=True)
+
+        labeled_cohorts["diagnosis"] = labeled_cohorts["icd_code_converted"].map(
+            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
+        )
+
+        labeled_cohorts = labeled_cohorts.drop(columns=["icd_code_converted"])
+        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+
+        self.labeled_cohorts = labeled_cohorts
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
+
+        logger.info("Done preparing tasks for the given cohorts")
+
+        return labeled_cohorts
+
+    def icd10toicd9(self, dx):
+        gem = pd.read_csv(self.gem_path)
+        dx_icd_10 = dx[dx["icd_version"] == 10]["icd_code"]
+
+        unique_elem_no_map = set(dx_icd_10) - set(gem["icd10cm"])
+
+        map_cms = dict(zip(gem["icd10cm"], gem["icd9cm"]))
+        map_manual = dict.fromkeys(unique_elem_no_map, "NaN")
+
+        for code_10 in map_manual:
+            for i in range(len(code_10), 0, -1):
+                tgt_10 = code_10[:i]
+                if tgt_10 in gem["icd10cm"]:
+                    tgt_9 = (
+                        gem[gem["icd10cm"].str.contains(tgt_10)]["icd9cm"]
+                        .mode()
+                        .iloc[0]
+                    )
+                    map_manual[code_10] = tgt_9
+                    break
+
+        def icd_convert(icd_version, icd_code):
+            if icd_version == 9:
+                return icd_code
+
+            elif icd_code in map_cms:
+                return map_cms[icd_code]
+
+            elif icd_code in map_manual:
+                return map_manual[icd_code]
+            else:
+                logger.warn("WRONG CODE: " + icd_code)
+
+        dx["icd_code_converted"] = dx.apply(
+            lambda x: icd_convert(x["icd_version"], x["icd_code"]), axis=1
+        )
+        return dx

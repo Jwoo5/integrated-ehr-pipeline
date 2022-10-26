@@ -1,0 +1,247 @@
+import os
+import logging
+import glob
+import treelib
+from collections import Counter
+
+import pandas as pd
+import numpy as np
+
+from ehrs import register_ehr, EHR
+
+logger = logging.getLogger(__name__)
+
+@register_ehr("eicu")
+class eICU(EHR):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+
+        self.ehr_name = "eicu"
+
+        if self.data_dir is None:
+            self.data_dir = os.path.join(self.cache_dir, self.ehr_name)
+
+            if not os.path.exists(self.data_dir):
+                logger.info(
+                    "Data is not found so try to download from the internet. "
+                    "Note that this is a restricted-access resource. "
+                    "Please log in to physionet.org with a credentialed user."
+                )
+                self.download_ehr_from_url(
+                    url="https://physionet.org/files/eicu-crd/2.0/",
+                    dest=self.data_dir
+                )
+
+        logger.info("Data directory is set to {}".format(self.data_dir))
+
+        if self.ccs_path is None:
+            self.ccs_path = os.path.join(self.cache_dir, "ccs_multi_dx_tool_2015.csv")
+
+            if not os.path.exists(self.ccs_path):
+                logger.info(
+                    "`ccs_multi_dx_tool_2015.csv` is not found so try to download from the internet."
+                )
+                self.download_ccs_from_url(self.cache_dir)
+
+        if self.gem_path is None:
+            self.gem_path = os.path.join(self.cache_dir, "icd10cmtoicd9gem.csv")
+
+            if not os.path.exists(self.gem_path):
+                logger.info(
+                    "`icd10cmtoicd9gem.csv` is not found so try to download from the internet."
+                )
+                self.download_icdgem_from_url(self.cache_dir)
+
+        if self.ext is None:
+            self.ext = self.infer_data_extension()
+
+        self.icustays = "patient" + self.ext
+        self.diagnoses = "diagnosis" + self.ext
+
+        self.features = [
+            {
+                "fname": "lab" + self.ext,
+                "type": "lab",
+                "timestamp": "labresultoffset",
+                "exclude": ["labid", "labresultrevisedoffset"],
+            },
+            {
+                "fname": "medication" + self.ext,
+                "type": "med",
+                "timestamp": "drugstartoffset",
+                "exclude": [
+                    "drugorderoffset",
+                    "drugstopoffset",
+                    "medicationid",
+                    "gtc",
+                    "drughiclseqno",
+                    "drugordercancelled",
+                ],
+            },
+            {
+                "fname": "infusiondrug" + self.ext,
+                "type": "inf",
+                "timestamp": "infusionoffset",
+                "exclude": ["infusiondrugid"],
+            },
+        ]
+
+        self.icustay_key = "patientunitstayid"
+        self.hadm_key = "patienthealthsystemstayid"
+
+    def build_cohorts(self, cached=False):
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+        icustays.loc[:, "LOS"] = icustays["unitdischargeoffset"] / 60 / 24
+        icustays.dropna(subset=["age"], inplace=True)
+        icustays["AGE"] = icustays["age"].replace("> 89", 300).astype(int)
+
+        # hacks for compatibility with other ehrs
+        icustays["INTIME"] = 0
+        icustays.rename(columns={"unitdischargeoffset": "OUTTIME"}, inplace=True)
+        icustays["OUTTIME"] = icustays["OUTTIME"] / 60
+        # DEATHTIME
+        # icustays["DEATHTIME"] = np.nan
+        # is_discharged_in_icu = icustays["unitdischargestatus"] == "Expired"
+        # icustays.loc[is_discharged_in_icu, "DEATHTIME"] = (
+        #     icustays.loc[is_discharged_in_icu, "OUTTIME"]
+        # )
+        # is_discharged_in_hos = (
+        #     (icustays["unitdischargestatus"] != "Expired")
+        #     & (icustays["hospitaldischargestatus"] == "Expired")
+        # )
+        # icustays.loc[is_discharged_in_hos, "DEATHTIME"] = (
+        #     icustays.loc[is_discharged_in_hos, "OUTTIME"]
+        # ) + 1
+
+        icustays.rename(columns={"hospitaldischargeoffset": "DISCHTIME"}, inplace=True)
+        icustays["DISCHTIME"] = icustays["DISCHTIME"] / 60
+
+        icustays.rename(columns={
+            "unitdischargelocation": "ICU_DISCHARGE_LOCATION",
+            "hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"
+        }, inplace=True)
+
+        cohorts = super().build_cohorts(icustays, cached=cached)
+
+        return cohorts
+
+    def prepare_tasks(self, cohorts=None, cached=False):
+        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+
+        str2cat = self.make_dx_mapping()
+        dx = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
+        dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
+        dx = dx[dx["diagnosis"] != -1]
+        dx = (
+            dx[[self.icustay_key, "diagnosis"]]
+            .groupby(self.icustay_key)
+            .agg(list)
+            .reset_index()
+        )
+        labeled_cohorts = labeled_cohorts.merge(dx, on=self.icustay_key, how="left")
+        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+
+        self.labeled_cohorts = labeled_cohorts
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
+
+        logger.info("Done preparing tasks for the given cohorts")
+
+        return labeled_cohorts
+
+    def make_dx_mapping(self):
+        diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
+        ccs_dx = pd.read_csv(self.ccs_path)
+        gem = pd.read_csv(self.gem_path)
+
+        diagnosis = diagnosis[["diagnosisstring", "icd9code"]]
+
+        # 1 to 1 matching btw str and code
+        # STR: diagnosisstring, CODE: icd9/10 code, CAT:category
+        # 1 str -> multiple code -> one cat
+
+        # 1. make str -> code dictonary
+        str2code = diagnosis.dropna(subset=["icd9code"])
+        str2code = str2code.groupby("diagnosisstring").first().reset_index()
+        str2code["icd9code"] = str2code["icd9code"].str.split(",")
+        str2code = str2code.explode("icd9code")
+        str2code["icd9code"] = str2code["icd9code"].str.replace(".", "", regex=False)
+        # str2code = dict(zip(notnull_dx["diagnosisstring"], notnull_dx["icd9code"]))
+        # 이거 하면 dxstring duplicated 자동 제거됨 ->x
+
+        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
+        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1].astype(int) - 1
+        icd2cat = dict(zip(ccs_dx["'ICD-9-CM CODE'"], ccs_dx["'CCS LVL 1'"]))
+
+        # 2. if code is not icd9, convert it to icd9
+        str2code_icd10 = str2code[str2code["icd9code"].isin(icd2cat.keys())]
+
+        map_cms = dict(zip(gem["icd10cm"], gem["icd9cm"]))
+        map_manual = dict.fromkeys(
+            set(str2code_icd10["icd9code"]) - set(gem["icd10cm"]), "NaN"
+        )
+
+        for code_10 in map_manual:
+            for i in range(len(code_10), 0, -1):
+                tgt_10 = code_10[:i]
+                if tgt_10 in gem["icd10cm"]:
+                    tgt_9 = (
+                        gem[gem["icd10cm"].str.contains(tgt_10)]["icd9cm"]
+                        .mode()
+                        .iloc[0]
+                    )
+                    map_manual[code_10] = tgt_9
+                    break
+        icd102icd9 = {**map_cms, **map_manual}
+
+        # 3. Convert Available Strings to category
+        str2cat = {}
+        for _, row in str2code.iterrows():
+            k, v = row
+            if v in icd2cat.keys():
+                cat = icd2cat[v]
+                if k in str2cat.keys() and str2cat[k] != cat:
+                    logger.warning(f"{k} has multiple categories{cat, str2cat[k]}")
+                str2cat[k] = icd2cat[v]
+            elif v in icd102icd9.keys():
+                cat = icd2cat[icd102icd9[v]]
+                if k in str2cat.keys() and str2cat[k] != cat:
+                    logger.warning(f"{k} has multiple categories{cat, str2cat[k]}")
+                str2cat[k] = icd2cat[icd102icd9[v]]
+
+        # 4. If no available category by mapping(~25%), use diagnosisstring hierarchy
+
+        # Make tree structure
+        tree = treelib.Tree()
+        tree.create_node("root", "root")
+        for dx, cat in str2cat.items():
+            dx = dx.split("|")
+            if not tree.contains(dx[0]):
+                tree.create_node(-1, dx[0], parent="root")
+            for i in range(2, len(dx)):
+                if not tree.contains("|".join(dx[:i])):
+                    tree.create_node(-1, "|".join(dx[:i]), parent="|".join(dx[: i - 1]))
+            if not tree.contains("|".join(dx)):
+                tree.create_node(cat, "|".join(dx), parent="|".join(dx[:-1]))
+
+        # Update non-leaf nodes with majority vote
+        nid_list = list(tree.expand_tree(mode=treelib.Tree.DEPTH))
+        nid_list.reverse()
+        for nid in nid_list:
+            if tree.get_node(nid).is_leaf():
+                continue
+            elif tree.get_node(nid).tag == -1:
+                tree.get_node(nid).tag = Counter(
+                    [child.tag for child in tree.children(nid)]
+                ).most_common(1)[0][0]
+
+        # Evaluate dxs without category
+        unmatched_dxs = set(diagnosis["diagnosisstring"]) - set(str2cat.keys())
+        for dx in unmatched_dxs:
+            dx = dx.split("|")
+            # Do not go to root level(can add noise)
+            for i in range(len(dx) - 1, 1, -1):
+                if tree.contains("|".join(dx[:i])):
+                    str2cat["|".join(dx)] = tree.get_node("|".join(dx[:i])).tag
+                    break
+
+        return str2cat
