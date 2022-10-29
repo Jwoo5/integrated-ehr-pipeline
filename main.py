@@ -5,7 +5,7 @@ import logging
 import argparse
 
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     level=os.environ.get("LOGLEVEL", "INFO").upper(),
     stream=sys.stdout,
@@ -35,7 +35,14 @@ def get_parser():
         metavar="DIR",
         default=None,
         help="directory containing data files of the given ehr (--ehr)."
-        "if not given, try to download from the internet.",
+                "if not given, try to download from the internet.",
+    )
+    parser.add_argument(
+        "--ext",
+        type=str,
+        default=None,
+        help="extension for ehr data to look for. "
+                "if not given, try to infer from --data"
     )
     parser.add_argument(
         "--ccs",
@@ -44,15 +51,28 @@ def get_parser():
         help="path to `ccs_multi_dx_tool_2015.csv`"
         "if not given, try to download from the internet.",
     )
+    parser.add_argument(
+        "--gem",
+        type=str,
+        default=None,
+        help="path to `icd10cmtoicd9gem.csv`"
+        "if not given, try to download from the internet.",
+    )
+
+    parser.add_argument(
+        "-c", "--cache",
+        action="store_true",
+        help="whether to load data from cache if exists"
+    )
 
     # misc
     parser.add_argument(
-        "--max_event_size", type=int, default=None, help="max event size to crop to"
+        "--max_event_size", type=int, default=256, help="max event size to crop to"
     )
     parser.add_argument(
         "--min_event_size",
         type=int,
-        default=None,
+        default=5,
         help="min event size to skip small samples",
     )
     parser.add_argument(
@@ -76,8 +96,14 @@ def get_parser():
         help="whether to use only the first icu or not",
     )
     parser.add_argument(
-        '--chunk_size', type=int, default=1024,
-        help='chunk size to read large csv files'
+        "--chunk_size",
+        type=int,
+        default=1024,
+        help="chunk size to read large csv files",
+    )
+    parser.add_argument(
+        '--bins', type=int, default=20,
+        help='num buckets to bin time intervals by'
     )
 
     return parser
@@ -85,6 +111,9 @@ def get_parser():
 
 def main(args):
     task = args.task
+
+    if not os.path.exists(args.dest):
+        os.makedirs(args.dest)
 
 if __name__ == "__main__":
     parser = get_parser()
