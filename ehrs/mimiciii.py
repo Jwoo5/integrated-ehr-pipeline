@@ -2,7 +2,6 @@ import os
 import logging
 import glob
 import pickle
-from sortedcontainers import SortedList
 
 from datetime import datetime
 import numpy as np
@@ -54,17 +53,17 @@ class MIMICIII(EHR):
             self.ext = self.infer_data_extension()
 
         # constants
-        self.icustays = "ICUSTAYS" + self.ext
-        self.patients = "PATIENTS" + self.ext
-        self.admissions = "ADMISSIONS" + self.ext
-        self.diagnoses = "DIAGNOSES_ICD" + self.ext
+        self._icustay_fname = "ICUSTAYS" + self.ext
+        self._patient_fname = "PATIENTS" + self.ext
+        self._admission_fname = "ADMISSIONS" + self.ext
+        self._diagnosis_fname = "DIAGNOSES_ICD" + self.ext
 
         # XXX more features? user choice?
         self.features = [
             {
                 "fname": "LABEVENTS" + self.ext,
-                "type": "lab",
                 "timestamp": "CHARTTIME",
+                "timeoffsetunit": "abs",
                 "exclude": ["ROW_ID", "SUBJECT_ID"],
                 "code": ["ITEMID"],
                 "desc": ["D_LABITEMS" + self.ext],
@@ -72,14 +71,14 @@ class MIMICIII(EHR):
             },
             {
                 "fname": "PRESCRIPTIONS" + self.ext,
-                "type": "med",
                 "timestamp": "STARTDATE",
+                "timeoffsetunit": "abs",
                 "exclude": ["ENDDATE", "GSN", "NDC", "ROW_ID", "SUBJECT_ID"],
             },
             {
                 "fname": "INPUTEVENTS_MV" + self.ext,
-                "type": "inf",
                 "timestamp": "STARTTIME",
+                "timeoffsetunit": "abs",
                 "exclude": [
                     "ENDTIME",
                     "STORETIME",
@@ -95,8 +94,8 @@ class MIMICIII(EHR):
             },
             {
                 "fname": "INPUTEVENTS_CV" + self.ext,
-                "type": "inf",
                 "timestamp": "CHARTTIME",
+                "timeoffsetunit": "abs",
                 "exclude": [
                     "STORETIME",
                     "CGID",
@@ -110,20 +109,74 @@ class MIMICIII(EHR):
                 "desc_key": ["LABEL"],
             },
         ]
-        self.icustay_key = "ICUSTAY_ID"
-        self.hadm_key = "HADM_ID"
+        self._icustay_key = "ICUSTAY_ID"
+        self._hadm_key = "HADM_ID"
 
     def build_cohorts(self, cached=False):
-        patients = pd.read_csv(os.path.join(self.data_dir, self.patients))
-        admissions = pd.read_csv(os.path.join(self.data_dir, self.admissions))
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+
+        icustays = self.make_compatible(icustays)
+        self.icustays = icustays
+
+        cohorts = super().build_cohorts(icustays, cached=cached)
+
+        return cohorts
+
+    def prepare_tasks(self, cohorts=None, cached=False):
+        if cached:
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
+            if labeled_cohorts is not None:
+                self.labeled_cohorts = labeled_cohorts
+                return labeled_cohorts
+
+        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+
+        logger.info(
+            "Start labeling cohorts for diagnosis prediction."
+        )
+
+        # define diagnosis prediction task
+        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+
+        diagnoses_with_cohorts = diagnoses[
+            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
+        ]
+        diagnoses_with_cohorts = (
+            diagnoses_with_cohorts.groupby(self.hadm_key)["ICD9_CODE"].apply(list).to_frame()
+        )
+        labeled_cohorts = labeled_cohorts.join(diagnoses_with_cohorts, on="HADM_ID")
+
+        ccs_dx = pd.read_csv(self.ccs_path)
+        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
+        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
+        lvl1 = {
+            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+        }
+
+        labeled_cohorts.dropna(subset=["ICD9_CODE"], inplace=True)
+        labeled_cohorts["diagnosis"] = labeled_cohorts["ICD9_CODE"].map(
+            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
+        )
+        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+        labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
+
+        self.labeled_cohorts = labeled_cohorts
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+
+        logger.info("Done preparing diagnosis prediction for the given cohorts")
+
+        return labeled_cohorts
+
+    def make_compatible(self, icustays):
+        patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
+        admissions = pd.read_csv(os.path.join(self.data_dir, self.admission_fname))
 
         # prepare icustays according to the appropriate format
-        icustays = icustays[icustays["FIRST_CAREUNIT"] == icustays["LAST_CAREUNIT"]]
-        icustays["INTIME"] = pd.to_datetime(
+        icustays = icustays[icustays["FIRST_CAREUNIT"] == icustays["LAST_CAREUNIT"]].copy()
+        icustays.loc[:, "INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True
         )
-        icustays["OUTTIME"] = pd.to_datetime(
+        icustays.loc[:, "OUTTIME"] = pd.to_datetime(
             icustays["OUTTIME"], infer_datetime_format=True
         )
         icustays = icustays.drop(columns=["ROW_ID"])
@@ -178,96 +231,7 @@ class MIMICIII(EHR):
             ~is_discharged_in_icu, "HOS_DISCHARGE_LOCATION"
         ] = icustays.loc[~is_discharged_in_icu, "DISCHARGE_LOCATION"]
 
-
-        cohorts = super().build_cohorts(icustays, cached=cached)
-
-        return cohorts
-
-    def prepare_tasks(self, cohorts=None, cached=False):
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
-
-        # define diagnosis prediction task
-        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
-
-        diagnoses_with_cohorts = diagnoses[
-            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
-        ]
-        diagnoses_with_cohorts = (
-            diagnoses_with_cohorts.groupby(self.hadm_key)["ICD9_CODE"].apply(list).to_frame()
-        )
-        labeled_cohorts = labeled_cohorts.join(diagnoses_with_cohorts, on="HADM_ID")
-
-        ccs_dx = pd.read_csv(self.ccs_path)
-        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
-        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
-        lvl1 = {
-            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
-        }
-
-        labeled_cohorts.dropna(subset=["ICD9_CODE"], inplace=True)
-        labeled_cohorts["diagnosis"] = labeled_cohorts["ICD9_CODE"].map(
-            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
-        )
-        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
-        labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
-
-        self.labeled_cohorts = labeled_cohorts
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
-
-        logger.info("Done preparing tasks for the given cohorts")
-
-        return labeled_cohorts
-
-    def encode_events(self):
-        """
-        encode event strings
-        # TODO put time-gap
-        2. based on the sorted list, define time offset --> (events_string, time-gap)
-        3. tokenize events_string 
-        4. final output: [CLS] tokenized(events_string) [time_token] [SEP]
-        """
-        collated_timestamps = {
-            icustay_id: [event[0] for event in events]
-            for icustay_id, events in self.cohort_events.items()
-        }
-        # calc time interval to the next event (i, i+1)
-        time_intervals = {
-            icustay_id: np.subtract(t, [t[0]] + t[:-1])
-            for icustay_id, t in collated_timestamps.items()
-        }
-        del collated_timestamps
-        breakpoint()
-        # exclude time_offset == 0 here
-        time_intervals_flattened = np.sort(
-            np.concatenate([v for v in time_intervals.values()])
-        )
-
-        # percentile --> quantile
-        # exclude time_offset == 0 --> bucket #0
-        # bins = [0, 5, 10, 15, ..., 100]
-        # x <= 5 --> bucket #1
-        # 5 <= x < 10 --> bucket #2
-        # ...
-        # 95 <= x --> bucket # 20
-        breakpoint()
-        bins = np.arange(self.bins + 1)
-        bins = bins * 100 / bins[-1]
-        bins.sort()
-        breakpoint()
-
-        bins = np.percentile(time_intervals_flattened, bins)
-        
-
-        breakpoint()
-        # time_offsets = 
-
-        """
-        tokenize
-        dpe
-        token_type_embedding
-        """
-
-        pass
+        return icustays
 
     # def run_pipeline(self):
     #     ...

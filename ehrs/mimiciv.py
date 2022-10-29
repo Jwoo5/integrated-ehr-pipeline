@@ -57,25 +57,30 @@ class MIMICIV(EHR):
         if self.ext is None:
             self.ext = self.infer_data_extension()
 
-        self.icustays = "icustays" + self.ext
-        self.patients = "patients" + self.ext
-        self.admissions = "admissions" + self.ext
-        self.diagnoses = "diagnoses_icd" + self.ext
+        self._icustay_fname = "icustays" + self.ext
+        self._patient_fname = "patients" + self.ext
+        self._admission_fname = "admissions" + self.ext
+        self._diagnosis_fname = "diagnoses_icd" + self.ext
 
         self.features = [
             {
                 "fname": "labevents" + self.ext,
-                "type": "lab",
                 "timestamp": "charttime",
-                "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id"],
+                "timeoffsetunit": "abs",
+                "exclude": [
+                    "labevent_id",
+                    "storetime",
+                    "subject_id",
+                    "specimen_id"
+                ],
                 "code": ["itemid"],
                 "desc": ["d_labitems" + self.ext],
                 "desc_key": ["label"],
             },
             {
                 "fname": "prescriptions" + self.ext,
-                "type": "med",
                 "timestamp": "starttime",
+                "timeoffsetunit": "abs",
                 "exclude": [
                     "gsn",
                     "ndc",
@@ -89,11 +94,12 @@ class MIMICIV(EHR):
             },
             {
                 "fname": "inputevents" + self.ext,
-                "type": "inf",
-                "timestamp": "charttime",
+                "timestamp": "starttime",
+                "timeoffsetunit": "abs",
                 "exclude": [
                     "endtime",
-                    "storetime" "orderid",
+                    "storetime",
+                    "orderid",
                     "linkorderid",
                     "subject_id",
                     "continueinnextdept",
@@ -105,13 +111,76 @@ class MIMICIV(EHR):
             },
         ]
 
-        self.icustay_key = "stay_id"
-        self.hadm_key = "hadm_id"
+        self._icustay_key = "stay_id"
+        self._hadm_key = "hadm_id"
 
     def build_cohorts(self, cached=False):
-        patients = pd.read_csv(os.path.join(self.data_dir, self.patients))
-        admissions = pd.read_csv(os.path.join(self.data_dir, self.admissions))
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+
+        icustays = self.make_compatible(icustays)
+        self.icustays = icustays
+
+        cohorts = super().build_cohorts(icustays, cached=cached)
+
+        return cohorts
+
+    def prepare_tasks(self, cohorts=None, cached=False):
+        if cached:
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
+            if labeled_cohorts is not None:
+                self.labeled_cohorts = labeled_cohorts
+                return labeled_cohorts
+
+        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+
+        logger.info(
+            "Start labeling cohorts for diagnosis prediction."
+        )
+
+        # define diagnosis prediction task
+        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+
+        diagnoses = self.icd10toicd9(diagnoses)
+
+        diagnoses_with_cohorts = diagnoses[
+            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
+        ]
+        diagnoses_with_cohorts = (
+            diagnoses_with_cohorts.groupby(self.hadm_key)["icd_code_converted"]
+            .apply(list)
+            .to_frame()
+        )
+        labeled_cohorts = labeled_cohorts.join(
+            diagnoses_with_cohorts, on=self.hadm_key, how="left"
+        )
+
+        ccs_dx = pd.read_csv(self.ccs_path)
+        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
+        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
+        lvl1 = {
+            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+        }
+
+        # Some of patients(21) does not have dx codes
+        labeled_cohorts.dropna(subset=["icd_code_converted"], inplace=True)
+
+        labeled_cohorts["diagnosis"] = labeled_cohorts["icd_code_converted"].map(
+            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
+        )
+
+        labeled_cohorts = labeled_cohorts.drop(columns=["icd_code_converted"])
+        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+
+        self.labeled_cohorts = labeled_cohorts
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+
+        logger.info("Done preparing diagnosis prediction for the given cohorts")
+
+        return labeled_cohorts
+
+    def make_compatible(self, icustays):
+        patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
+        admissions = pd.read_csv(os.path.join(self.data_dir, self.admission_fname))
 
         # prepare icustays according to the appropriate format
         icustays = icustays.rename(columns={
@@ -163,53 +232,7 @@ class MIMICIV(EHR):
             ~is_discharged_in_icu, "HOS_DISCHARGE_LOCATION"
         ] = icustays.loc[~is_discharged_in_icu, "discharge_location"]
 
-        cohorts = super().build_cohorts(icustays, cached=cached)
-
-        return cohorts
-
-    def prepare_tasks(self, cohorts=None, cached=False):
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
-
-        # define diagnosis prediction task
-        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
-
-        diagnoses = self.icd10toicd9(diagnoses)
-
-        diagnoses_with_cohorts = diagnoses[
-            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
-        ]
-        diagnoses_with_cohorts = (
-            diagnoses_with_cohorts.groupby(self.hadm_key)["icd_code_converted"]
-            .apply(list)
-            .to_frame()
-        )
-        labeled_cohorts = labeled_cohorts.join(
-            diagnoses_with_cohorts, on=self.hadm_key, how="left"
-        )
-
-        ccs_dx = pd.read_csv(self.ccs_path)
-        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
-        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
-        lvl1 = {
-            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
-        }
-
-        # Some of patients(21) does not have dx codes
-        labeled_cohorts.dropna(subset=["icd_code_converted"], inplace=True)
-
-        labeled_cohorts["diagnosis"] = labeled_cohorts["icd_code_converted"].map(
-            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
-        )
-
-        labeled_cohorts = labeled_cohorts.drop(columns=["icd_code_converted"])
-        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
-
-        self.labeled_cohorts = labeled_cohorts
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
-
-        logger.info("Done preparing tasks for the given cohorts")
-
-        return labeled_cohorts
+        return icustays
 
     def icd10toicd9(self, dx):
         gem = pd.read_csv(self.gem_path)

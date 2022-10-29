@@ -1,12 +1,18 @@
 import sys
 import os
+import shutil
 import glob
 import subprocess
-import shutil
 import logging
+
+from typing import Union, List
 
 import datetime
 import pandas as pd
+import numpy as np
+
+from sortedcontainers import SortedList
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +70,60 @@ class EHR(object):
 
         self.bins = cfg.bins
 
+        self.special_tokens_dict = dict()
+        self.max_special_tokens = 100
+
+        self._icustay_fname = None
+        self._patient_fname = None
+        self._admission_fname  = None
+        self._diagnosis_fname = None
+
+        self._icustay_key = None
+        self._hadm_key = None
+
+    @property
+    def icustay_fname(self):
+        return self._icustay_fname
+    
+    @property
+    def patient_fname(self):
+        return self._patient_fname
+    
+    @property
+    def admission_fname(self):
+        return self._admission_fname
+    
+    @property
+    def diagnosis_fname(self):
+        return self._diagnosis_fname
+
+    @property
+    def icustay_key(self):
+        return self._icustay_key
+    
+    @property
+    def hadm_key(self):
+        return self._hadm_key
+
+    @property
+    def num_special_tokens(self):
+        return len(self.special_tokens_dict)
+
     def build_cohorts(self, icustays, cached=False):
         if cached:
-            loaded = self.load_from_cache(self.ehr_name + ".cohorts")
-            if loaded:
-                return self.cohorts
+            cohorts = self.load_from_cache(self.ehr_name + ".cohorts")
+            if cohorts is not None:
+                self.cohorts = cohorts
+                return cohorts
+
+        if not self.is_compatible(icustays):
+            raise AssertionError(
+                "{} do not have required columns to build cohorts.".format(self.icustay_fname)
+                + " Please make sure that dataframe for icustays is compatible with other ehrs."
+            )
 
         logger.info(
-            "Start to build cohorts for {}".format(self.ehr_name)
+            "Start building cohorts for {}".format(self.ehr_name)
         )
 
         obs_size = self.obs_size
@@ -118,9 +170,14 @@ class EHR(object):
     # TODO process specific tasks according to user choice?
     def prepare_tasks(self, cohorts=None, cached=False):
         if cached:
-            loaded = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
-            if loaded:
-                return self.cohorts
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
+            if labeled_cohorts is not None:
+                self.labeled_cohorts = labeled_cohorts
+                return labeled_cohorts
+
+        logger.info(
+            "Start labeling cohorts for predictive tasks."
+        )
 
         if cohorts is None:
             cohorts = self.cohorts
@@ -239,28 +296,269 @@ class EHR(object):
                 "HOS_DISCHARGE_LOCATION"
             ]
         )
+        
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
+
+        logger.info("Done preparing tasks except for diagnosis prediction.")
 
         return labeled_cohorts
 
+    def prepare_events(self, cohorts=None, cached=False):
+        if cached:
+            cohort_events = self.load_from_cache(self.ehr_name + ".cohorts.labeled.events")
+            if cohort_events is not None:
+                self.cohort_events = cohort_events
+                return self.cohort_events
+
+        logger.info(
+            "Start preparing medical events for each cohort."
+        )
+
+        if hasattr(self, "icustays"):
+            icustays = self.icustays
+        else:
+            icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+            icustays = self.make_compatible(icustays)
+
+        icustays_by_hadm_key = icustays.groupby(self.hadm_key)[
+            self.icustay_key
+        ].apply(list)
+        icustay_to_intime = dict(
+            zip(icustays[self.icustay_key], icustays["INTIME"])
+        )
+        icustay_to_outtime = dict(
+            zip(icustays[self.icustay_key], icustays["OUTTIME"])
+        )
+
+        if cohorts is None:
+            cohorts = self.labeled_cohorts
+
+        cohort_events = {
+            id: SortedList() for id in cohorts[self.icustay_key].to_list()
+        }
+
+        for feat in self.features:
+            fname = feat["fname"]
+            timestamp_key = feat["timestamp"]
+            excludes = feat["exclude"]
+            hour_to_offset_unit = None
+            if feat["timeoffsetunit"] == "min":
+                hour_to_offset_unit = 60
+
+            logger.info("{} in progress.".format(fname))
+
+            code_to_descriptions = None
+            if "code" in feat:
+                code_to_descriptions = {
+                    k: pd.read_csv(os.path.join(self.data_dir, v))
+                    for k, v in zip(feat["code"], feat["desc"])
+                }
+                code_to_descriptions = {
+                    k: dict(zip(v[k], v[d_k]))
+                    for (k, v), d_k in zip(
+                        code_to_descriptions.items(), feat["desc_key"]
+                    )
+                }
+
+            infer_icustay_from_hadm_key = False
+            columns = pd.read_csv(
+                os.path.join(self.data_dir, fname), index_col=0, nrows=0
+            ).columns.to_list()
+            if self.icustay_key not in columns:
+                infer_icustay_from_hadm_key = True
+                if self.hadm_key not in columns:
+                    raise AssertionError(
+                        "{} doesn't have one of these columns: {}".format(
+                            fname, [self.icustay_key, self.hadm_key]
+                        )
+                    )
+
+            chunks = pd.read_csv(
+                os.path.join(self.data_dir, fname), chunksize=self.chunk_size
+            )
+            for events in tqdm(chunks):
+                if events[timestamp_key].dtype != int:
+                    events[timestamp_key] = pd.to_datetime(
+                        events[timestamp_key], infer_datetime_format=True
+                    )
+                dummy_for_sanity_check = events[timestamp_key].iloc[0]
+                if (
+                    isinstance(dummy_for_sanity_check, datetime.datetime)
+                    and isinstance(self.obs_size, datetime.timedelta)
+                ) or (
+                    isinstance(dummy_for_sanity_check, (int, np.integer))
+                    and isinstance(self.obs_size, (int, np.integer))
+                ):
+                    pass
+                else:
+                    raise AssertionError(
+                        (type(dummy_for_sanity_check), type(self.obs_size))
+                    )
+                events = events.drop(columns=excludes)
+                if infer_icustay_from_hadm_key:
+                    events = events[~events[self.hadm_key].isna()]
+                else:
+                    events = events[~events[self.icustay_key].isna()]
+
+                for _, event in events.iterrows():
+                    charttime = event[timestamp_key]
+                    if infer_icustay_from_hadm_key:
+                        if event[self.hadm_key] not in icustays_by_hadm_key:
+                            continue
+
+                        # infer icustay id for the event based on `self.hadm_key`
+                        hadm_key_icustays = icustays_by_hadm_key[
+                            event[self.hadm_key]
+                        ]
+                        for icustay_id in hadm_key_icustays:
+                            intime = icustay_to_intime[icustay_id]
+                            outtime = icustay_to_outtime[icustay_id]
+                            if hour_to_offset_unit is not None:
+                                intime *= hour_to_offset_unit
+                                outtime *= hour_to_offset_unit
+
+                            if intime <= charttime and charttime <= outtime:
+                                event[self.icustay_key] = icustay_id
+                                break
+
+                        # which means that the event has no corresponding icustay
+                        if self.icustay_key not in event:
+                            continue
+                    else:
+                        if event[self.icustay_key] not in cohort_events:
+                            continue
+
+                        intime = icustay_to_intime[event[self.icustay_key]]
+                        outtime = icustay_to_outtime[event[self.icustay_key]]
+                        if hour_to_offset_unit is not None:
+                            intime *= hour_to_offset_unit
+                            outtime *= hour_to_offset_unit
+                        # which means that the event has been charted before / after the icustay
+                        if not (intime <= charttime and charttime <= outtime):
+                            continue
+
+                    icustay_id = event[self.icustay_key]
+                    if icustay_id in cohort_events:
+                        event = event.drop(
+                            labels=[self.icustay_key, self.hadm_key, timestamp_key],
+                            errors='ignore'
+                        )
+                        event_string = []
+                        # TODO process based on which embedding strategy is adopted: desc-based or code-based
+                        for name, val in event.to_dict().items():
+                            if pd.isna(val):
+                                continue
+                            # convert code to description if applicable
+                            if (
+                                code_to_descriptions is not None
+                                and name in code_to_descriptions
+                            ):
+                                val = code_to_descriptions[name][val]
+
+                            if isinstance(val, (float, np.floating)):
+                                # NOTE round to 4 decimals
+                                val = round(val, 4)
+
+                            val = str(val).strip()
+                            event_string.append(" ".join([name, val]))
+                        event_string = " ".join(event_string)
+
+                        cohort_events[icustay_id].add(
+                            (charttime, fname[: -len(self.ext)], event_string)
+                        )
+        total = len(cohort_events)
+        cohort_events = {
+            k: list(v) if len(v) <= self.max_event_size else list(v[-self.max_event_size:])
+            for k, v in cohort_events.items()
+            if len(v) >= self.min_event_size
+        }
+        skipped = total - len(cohort_events)
+
+        logger.info(
+            "Done preparing events for the given cohorts."
+            f" Skipped {skipped} cohorts since they have too few"
+            " (or no) corresponding medical events."
+        )
+
+        self.cohort_events = cohort_events
+        self.save_to_cache(
+            self.cohort_events, self.ehr_name + ".cohorts.labeled.events", use_pickle=True
+        )
+
+        return cohort_events
+
+    def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
+        if isinstance(new_special_tokens, str):
+            new_special_tokens = [new_special_tokens]
+
+        num_special_tokens = self.num_special_tokens
+        overlapped = []
+        for new_special_token in new_special_tokens:
+            if new_special_token in self.special_tokens_dict:
+                overlapped.append(new_special_token)
+        
+        if len(overlapped) > 0:
+            logger.warn(
+                "There are some tokens that have already been set to special tokens."
+                " Please provide only NEW tokens. Aborted."
+            )
+            return None
+        elif num_special_tokens + len(new_special_tokens) > self.max_special_tokens:
+            logger.warn(
+                f"Total additional special tokens should be less than {self.max_special_tokens}"
+                " Aborted."
+            )
+            return None
+
+        self.special_tokens_dict.update({
+            k: "[unused{}]".format(i)
+            for i, k in enumerate(new_special_tokens, start=num_special_tokens+1)
+        })
+
+    def make_compatible(self, icustays):
+        """
+        make different ehrs compatible with one another here
+        """
+        raise NotImplementedError()
+
+    def is_compatible(self, icustays):
+        checklist = [
+            self.hadm_key,
+            self.icustay_key,
+            "LOS",
+            "AGE",
+            "INTIME",
+            "OUTTIME",
+            "DISCHTIME",
+            "ICU_DISCHARGE_LOCATION",
+            "HOS_DISCHARGE_LOCATION"
+        ]
+        for item in checklist:
+            if item not in icustays.columns.to_list():
+                return False
+        return True
+
     def save_to_cache(self, f, fname, use_pickle=False) -> None:
         if use_pickle:
-            pass
+            import pickle
+            with open(os.path.join(self.cache_dir, fname), "wb") as fptr:
+                pickle.dump(f, fptr)
         else:
             f.to_pickle(
                 os.path.join(self.cache_dir, fname)
             )
 
-    def load_from_cache(self, fname) -> bool:
+    def load_from_cache(self, fname):
         cached = os.path.join(self.cache_dir, fname)
         if os.path.exists(cached):
-            self.cohorts = pd.read_pickle(cached)
+            data = pd.read_pickle(cached)
 
             logger.info(
-                "Loaded data from {}".format(len(self.cohorts), cached)
+                "Loaded data from {}".format(cached)
             )
-            return True
+            return data
         else:
-            return False
+            return None
 
     def infer_data_extension(self, threshold=10) -> str:
         ext = None

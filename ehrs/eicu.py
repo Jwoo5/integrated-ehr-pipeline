@@ -55,20 +55,20 @@ class eICU(EHR):
         if self.ext is None:
             self.ext = self.infer_data_extension()
 
-        self.icustays = "patient" + self.ext
-        self.diagnoses = "diagnosis" + self.ext
+        self._icustay_fname = "patient" + self.ext
+        self._diagnosis_fname = "diagnosis" + self.ext
 
         self.features = [
             {
                 "fname": "lab" + self.ext,
-                "type": "lab",
                 "timestamp": "labresultoffset",
+                "timeoffsetunit": "min",
                 "exclude": ["labid", "labresultrevisedoffset"],
             },
             {
                 "fname": "medication" + self.ext,
-                "type": "med",
                 "timestamp": "drugstartoffset",
+                "timeoffsetunit": "min",
                 "exclude": [
                     "drugorderoffset",
                     "drugstopoffset",
@@ -79,18 +79,60 @@ class eICU(EHR):
                 ],
             },
             {
-                "fname": "infusiondrug" + self.ext,
-                "type": "inf",
+                "fname": "infusionDrug" + self.ext,
                 "timestamp": "infusionoffset",
+                "timeoffsetunit": "min",
                 "exclude": ["infusiondrugid"],
             },
         ]
 
-        self.icustay_key = "patientunitstayid"
-        self.hadm_key = "patienthealthsystemstayid"
+        self._icustay_key = "patientunitstayid"
+        self._hadm_key = "patienthealthsystemstayid"
 
     def build_cohorts(self, cached=False):
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+
+        icustays = self.make_compatible(icustays)
+        self.icustays = icustays
+
+        cohorts = super().build_cohorts(icustays, cached=cached)
+
+        return cohorts
+
+    def prepare_tasks(self, cohorts=None, cached=False):
+        if cached:
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
+            if labeled_cohorts is not None:
+                self.labeled_cohorts = labeled_cohorts
+                return labeled_cohorts
+
+        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+
+        logger.info(
+            "Start labeling cohorts for diagnosis prediction."
+        )
+
+        str2cat = self.make_dx_mapping()
+        dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+        dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
+        dx = dx[dx["diagnosis"] != -1]
+        dx = (
+            dx[[self.icustay_key, "diagnosis"]]
+            .groupby(self.icustay_key)
+            .agg(list)
+            .reset_index()
+        )
+        labeled_cohorts = labeled_cohorts.merge(dx, on=self.icustay_key, how="left")
+        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+
+        self.labeled_cohorts = labeled_cohorts
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+
+        logger.info("Done preparing diagnosis prediction for the given cohorts")
+
+        return labeled_cohorts
+
+    def make_compatible(self, icustays):
         icustays.loc[:, "LOS"] = icustays["unitdischargeoffset"] / 60 / 24
         icustays.dropna(subset=["age"], inplace=True)
         icustays["AGE"] = icustays["age"].replace("> 89", 300).astype(int)
@@ -121,35 +163,10 @@ class eICU(EHR):
             "hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"
         }, inplace=True)
 
-        cohorts = super().build_cohorts(icustays, cached=cached)
-
-        return cohorts
-
-    def prepare_tasks(self, cohorts=None, cached=False):
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
-
-        str2cat = self.make_dx_mapping()
-        dx = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
-        dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
-        dx = dx[dx["diagnosis"] != -1]
-        dx = (
-            dx[[self.icustay_key, "diagnosis"]]
-            .groupby(self.icustay_key)
-            .agg(list)
-            .reset_index()
-        )
-        labeled_cohorts = labeled_cohorts.merge(dx, on=self.icustay_key, how="left")
-        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
-
-        self.labeled_cohorts = labeled_cohorts
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
-
-        logger.info("Done preparing tasks for the given cohorts")
-
-        return labeled_cohorts
+        return icustays
 
     def make_dx_mapping(self):
-        diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnoses))
+        diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
         ccs_dx = pd.read_csv(self.ccs_path)
         gem = pd.read_csv(self.gem_path)
 
