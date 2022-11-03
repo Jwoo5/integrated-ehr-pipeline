@@ -124,8 +124,8 @@ class MIMICIV(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts=None, cached=False):
-        if cached:
+    def prepare_tasks(self, cohorts, cached=False):
+        if cohorts is None and cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 self.labeled_cohorts = labeled_cohorts

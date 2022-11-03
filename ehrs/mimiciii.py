@@ -122,11 +122,10 @@ class MIMICIII(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts=None, cached=False):
-        if cached:
+    def prepare_tasks(self, cohorts, cached=False):
+        if cohorts is None and cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
-                self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
         labeled_cohorts = super().prepare_tasks(cohorts, cached)
@@ -160,7 +159,6 @@ class MIMICIII(EHR):
         labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
         labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
 
-        self.labeled_cohorts = labeled_cohorts
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
 
         logger.info("Done preparing diagnosis prediction for the given cohorts")
@@ -232,6 +230,3 @@ class MIMICIII(EHR):
         ] = icustays.loc[~is_discharged_in_icu, "DISCHARGE_LOCATION"]
 
         return icustays
-
-    # def run_pipeline(self):
-    #     ...
