@@ -332,9 +332,7 @@ class EHR(object):
         cohorts.drop(columns=["INTIME"], inplace=True)
 
         cohort_events = {
-            str(int(hadm)) + "_" + str(int(icustay)): SortedList()
-            for hadm, icustay
-            in zip(cohorts[self.hadm_key].to_list(), cohorts[self.icustay_key].to_list())
+            id: SortedList() for id in cohorts[self.icustay_key].to_list()
         }
 
         patterns_for_numeric = re.compile("\d+(\.\d+)*")
@@ -411,7 +409,6 @@ class EHR(object):
                 for _, event in events.iterrows():
                     charttime = event[timestamp_key]
                     if infer_icustay_from_hadm_key:
-                        key = None
                         # infer icustay id for the event based on `self.hadm_key`
                         hadm_key_icustays = icustays_by_hadm_key[
                             event[self.hadm_key]
@@ -422,11 +419,11 @@ class EHR(object):
                                 intime *= hour_to_offset_unit
     
                             if intime <= charttime and charttime <= intime + obs_size:
-                                key = str(int(event[self.hadm_key])) + "_" + str(int(icustay_id))
+                                event[self.icustay_key] = icustay_id
                                 break
 
                         # which means that the event has no corresponding icustay
-                        if key is None:
+                        if self.icustay_key is None:
                             continue
                     else:
                         intime = icustay_to_intime[event[self.icustay_key]]
@@ -436,9 +433,8 @@ class EHR(object):
                         if not (intime <= charttime and charttime <= intime + obs_size):
                             continue
                         
-                        key = str(int(event[self.hadm_key])) + "_" + str(int(event[self.icustay_key]))
-
-                    if key in cohort_events:
+                    icustay_id = event[self.icustay_key]
+                    if icustay_id in cohort_events:
                         event = event.drop(
                             labels=[self.icustay_key, self.hadm_key, timestamp_key],
                             errors='ignore'
@@ -484,7 +480,7 @@ class EHR(object):
 
                         event_string = (cols, vals)
 
-                        cohort_events[key].add(
+                        cohort_events[icustay_id].add(
                             (charttime, fname[: -len(self.ext)], event_string)
                         )
         total = len(cohort_events)
@@ -520,13 +516,13 @@ class EHR(object):
         last_time_interval = pd.Timedelta(-1)
 
         collated_timestamps = {
-            key: [event[0] for event in events]
-            for key, events in cohort_events.items()
+            icustay_id: [event[0] for event in events]
+            for icustay_id, events in cohort_events.items()
         }
         # calc time interval to the next event (i, i+1)
         time_intervals = {
-            key: np.subtract(t[1:], t[:-1])
-            for key, t in collated_timestamps.items()
+            icustay_id: np.subtract(t[1:], t[:-1])
+            for icustay_id, t in collated_timestamps.items()
         }
         # exclude zero time intervals for quantizing
         time_intervals_flattened = {
@@ -618,7 +614,7 @@ class EHR(object):
             print(data_dir, file=valid_f)
             print(data_dir, file=test_f)
 
-            for hadm_icustay, events_per_icustay in encoded_events.items():
+            for icustay_id, events_per_icustay in encoded_events.items():
                 # make list of table names
                 table_names = [x[0] for x in events_per_icustay]
                 # tokenize table names
@@ -673,21 +669,21 @@ class EHR(object):
                 # generate the same shape list filled with self.timeint_type_id
                 timeint_type_tokens = [[self.timeint_type_id] for _ in time_intervals_tokenized]
 
-                # encoded_events[hadm_icustay]: sequence of tokenized events [table_name, event_strings, time_interval]
-                #   List[List[tokens]], where encoded_events[hadm_icustay][i] is a sequence of input ids for i-th event of hadm_icustay
+                # encoded_events[icustay_id]: sequence of tokenized events [table_name, event_strings, time_interval]
+                #   List[List[tokens]], where encoded_events[icustay_id][i] is a sequence of input ids for i-th event of icustay_id
                 # token_type_embeddings[ocustay]: corresponding token type ids
                 # NOTE prepend [CLS], append [SEP] here (temporarily only for hierarchical)
-                encoded_events[hadm_icustay] = [
+                encoded_events[icustay_id] = [
                     [cls_token_id] + table_name + event + time_interval + [sep_token_id]
                     for table_name, event, time_interval
                     in zip(table_names_tokenized, events_tokenized, time_intervals_tokenized)
                 ]
-                token_type_embeddings[hadm_icustay] = [
+                token_type_embeddings[icustay_id] = [
                     [self.cls_type_id] + table_type_token + col_val_type_token + timeint_type_token + [self.sep_type_id]
                     for table_type_token, col_val_type_token, timeint_type_token
                     in zip(table_type_tokens, col_val_type_tokens, timeint_type_tokens)
                 ]
-                # TODO define digit_place_embeddings[hadm_icustay] for encoded_events[hadm_icustay][...] here
+                # TODO define digit_place_embeddings[icustay_id] for encoded_events[icustay_id][...] here
 
                 # TODO if flattened input, process more ...
                 # encoded_events = {
@@ -696,17 +692,17 @@ class EHR(object):
 
                 # save to data directory
                 np.save(
-                    os.path.join(data_dir, "input_ids", hadm_icustay),
-                    np.array(encoded_events[hadm_icustay], dtype=object)
+                    os.path.join(data_dir, "input_ids", icustay_id),
+                    np.array(encoded_events[icustay_id], dtype=object)
                 )
                 np.save(
-                    os.path.join(data_dir, "token_type_ids", hadm_icustay),
-                    np.array(token_type_embeddings[hadm_icustay], dtype=object)
+                    os.path.join(data_dir, "token_type_ids", icustay_id),
+                    np.array(token_type_embeddings[icustay_id], dtype=object)
                 )
                 # TODO save digit place embeddings
                 # np.save(
-                #     os.path.join(data_dir, "digit_place_ids", hadm_icustay),
-                #     np.array(digit_place_embeddings[hadm_icustay], dtype=object)
+                #     os.path.join(data_dir, "digit_place_ids", icustay_id),
+                #     np.array(digit_place_embeddings[icustay_id], dtype=object)
                 # )
 
                 # manifest
@@ -719,7 +715,7 @@ class EHR(object):
                     dest = test_f
                 
                 print(
-                    f"{hadm_icustay}\t{len(encoded_events[hadm_icustay])}", file=dest
+                    f"{icustay_id}\t{len(encoded_events[icustay_id])}", file=dest
                 )
 
         logger.info("Done encoding events.")
