@@ -423,7 +423,7 @@ class EHR(object):
                                 break
 
                         # which means that the event has no corresponding icustay
-                        if self.icustay_key is None:
+                        if self.icustay_key not in event:
                             continue
                     else:
                         intime = icustay_to_intime[event[self.icustay_key]]
