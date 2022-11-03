@@ -1,8 +1,9 @@
 import os
 import sys
 import logging
-
 import argparse
+
+from ehrs import EHR_REGISTRY
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -26,6 +27,15 @@ def get_parser():
     parser.add_argument(
         "--dest", default="outputs", type=str, metavar="DIR", help="output directory"
     )
+    parser.add_argument(
+        "--valid-percent",
+        default=0.1,
+        type=float,
+        metavar="D",
+        help="percentage of data to use as validation and test set (between 0 and 0.5)",
+    )
+    parser.add_argument("--seed", default=42, type=int, metavar="N", help="random seed")
+
     # data
     parser.add_argument(
         "--ehr", type=str, required=True, help="name of the ehr system to be processed."
@@ -64,6 +74,7 @@ def get_parser():
         action="store_true",
         help="whether to load data from cache if exists"
     )
+
 
     # misc
     parser.add_argument(
@@ -114,6 +125,9 @@ def main(args):
 
     if not os.path.exists(args.dest):
         os.makedirs(args.dest)
+
+    ehr = EHR_REGISTRY[args.ehr](args)
+    ehr.run_pipeline()
 
 if __name__ == "__main__":
     parser = get_parser()
