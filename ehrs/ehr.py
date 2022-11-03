@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import shutil
 import glob
 import subprocess
@@ -67,11 +68,21 @@ class EHR(object):
         self.chunk_size = cfg.chunk_size
 
         self.dest = cfg.dest
+        self.valid_percent = cfg.valid_percent
+        self.seed = cfg.seed
+        assert 0 <= cfg.valid_percent and cfg.valid_percent <= 0.5
 
         self.bins = cfg.bins
 
         self.special_tokens_dict = dict()
         self.max_special_tokens = 100
+
+        self.table_type_id = 0
+        self.column_type_id = 1
+        self.value_type_id = 2
+        self.timeint_type_id = 3
+        self.cls_type_id = 4
+        self.sep_type_id = 5
 
         self._icustay_fname = None
         self._patient_fname = None
@@ -113,7 +124,6 @@ class EHR(object):
         if cached:
             cohorts = self.load_from_cache(self.ehr_name + ".cohorts")
             if cohorts is not None:
-                self.cohorts = cohorts
                 return cohorts
 
         if not self.is_compatible(icustays):
@@ -156,31 +166,29 @@ class EHR(object):
                 "readmission"
             ] = 0
 
-        self.cohorts = icustays
+        cohorts = icustays
 
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(
-                len(self.cohorts)
+                len(cohorts)
             )
         )
-        self.save_to_cache(self.cohorts, self.ehr_name + ".cohorts")
+        self.save_to_cache(cohorts, self.ehr_name + ".cohorts")
 
-        return self.cohorts
+        return cohorts
 
     # TODO process specific tasks according to user choice?
     def prepare_tasks(self, cohorts=None, cached=False):
-        if cached:
+        if cohorts is None and cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
-                self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
+            else:
+                raise RuntimeError()
 
         logger.info(
             "Start labeling cohorts for predictive tasks."
         )
-
-        if cohorts is None:
-            cohorts = self.cohorts
 
         labeled_cohorts = cohorts[[
             self.hadm_key,
@@ -287,7 +295,6 @@ class EHR(object):
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
             columns=[
-                "INTIME",
                 "OUTTIME",
                 "in_icu_mortality",
                 "in_hospital_mortality",
@@ -296,54 +303,51 @@ class EHR(object):
                 "HOS_DISCHARGE_LOCATION"
             ]
         )
-        
+
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
         logger.info("Done preparing tasks except for diagnosis prediction.")
 
         return labeled_cohorts
 
-    def prepare_events(self, cohorts=None, cached=False):
-        if cached:
+    def prepare_events(self, cohorts, cached=False):
+        if cohorts is None and cached:
             cohort_events = self.load_from_cache(self.ehr_name + ".cohorts.labeled.events")
             if cohort_events is not None:
-                self.cohort_events = cohort_events
-                return self.cohort_events
+                return cohort_events
+            else:
+                raise RuntimeError()
 
         logger.info(
             "Start preparing medical events for each cohort."
         )
 
-        if hasattr(self, "icustays"):
-            icustays = self.icustays
-        else:
-            icustays = pd.read_csv(os.path.join(self.data_dir, self.icustays))
-            icustays = self.make_compatible(icustays)
-
-        icustays_by_hadm_key = icustays.groupby(self.hadm_key)[
+        icustays_by_hadm_key = cohorts.groupby(self.hadm_key)[
             self.icustay_key
         ].apply(list)
         icustay_to_intime = dict(
-            zip(icustays[self.icustay_key], icustays["INTIME"])
-        )
-        icustay_to_outtime = dict(
-            zip(icustays[self.icustay_key], icustays["OUTTIME"])
+            zip(cohorts[self.icustay_key], cohorts["INTIME"])
         )
 
-        if cohorts is None:
-            cohorts = self.labeled_cohorts
+        cohorts.drop(columns=["INTIME"], inplace=True)
 
         cohort_events = {
-            id: SortedList() for id in cohorts[self.icustay_key].to_list()
+            str(int(hadm)) + "_" + str(int(icustay)): SortedList()
+            for hadm, icustay
+            in zip(cohorts[self.hadm_key].to_list(), cohorts[self.icustay_key].to_list())
         }
+
+        patterns_for_numeric = re.compile("\d+(\.\d+)*")
 
         for feat in self.features:
             fname = feat["fname"]
             timestamp_key = feat["timestamp"]
             excludes = feat["exclude"]
             hour_to_offset_unit = None
+            obs_size = self.obs_size
             if feat["timeoffsetunit"] == "min":
                 hour_to_offset_unit = 60
+                obs_size *= 60
 
             logger.info("{} in progress.".format(fname))
 
@@ -377,6 +381,15 @@ class EHR(object):
                 os.path.join(self.data_dir, fname), chunksize=self.chunk_size
             )
             for events in tqdm(chunks):
+                events = events.drop(columns=excludes)
+                if infer_icustay_from_hadm_key:
+                    events = events[events[self.hadm_key].isin(list(icustays_by_hadm_key.keys()))]
+                else:
+                    events = events[events[self.icustay_key].isin(cohorts[self.icustay_key])]
+
+                if len(events) == 0:
+                    continue
+
                 if events[timestamp_key].dtype != int:
                     events[timestamp_key] = pd.to_datetime(
                         events[timestamp_key], infer_datetime_format=True
@@ -394,76 +407,84 @@ class EHR(object):
                     raise AssertionError(
                         (type(dummy_for_sanity_check), type(self.obs_size))
                     )
-                events = events.drop(columns=excludes)
-                if infer_icustay_from_hadm_key:
-                    events = events[~events[self.hadm_key].isna()]
-                else:
-                    events = events[~events[self.icustay_key].isna()]
 
                 for _, event in events.iterrows():
                     charttime = event[timestamp_key]
                     if infer_icustay_from_hadm_key:
-                        if event[self.hadm_key] not in icustays_by_hadm_key:
-                            continue
-
+                        key = None
                         # infer icustay id for the event based on `self.hadm_key`
                         hadm_key_icustays = icustays_by_hadm_key[
                             event[self.hadm_key]
                         ]
                         for icustay_id in hadm_key_icustays:
                             intime = icustay_to_intime[icustay_id]
-                            outtime = icustay_to_outtime[icustay_id]
                             if hour_to_offset_unit is not None:
                                 intime *= hour_to_offset_unit
-                                outtime *= hour_to_offset_unit
-
-                            if intime <= charttime and charttime <= outtime:
-                                event[self.icustay_key] = icustay_id
+    
+                            if intime <= charttime and charttime <= intime + obs_size:
+                                key = str(int(event[self.hadm_key])) + "_" + str(int(icustay_id))
                                 break
 
                         # which means that the event has no corresponding icustay
-                        if self.icustay_key not in event:
+                        if key is None:
                             continue
                     else:
-                        if event[self.icustay_key] not in cohort_events:
-                            continue
-
                         intime = icustay_to_intime[event[self.icustay_key]]
-                        outtime = icustay_to_outtime[event[self.icustay_key]]
                         if hour_to_offset_unit is not None:
                             intime *= hour_to_offset_unit
-                            outtime *= hour_to_offset_unit
                         # which means that the event has been charted before / after the icustay
-                        if not (intime <= charttime and charttime <= outtime):
+                        if not (intime <= charttime and charttime <= intime + obs_size):
                             continue
+                        
+                        key = str(int(event[self.hadm_key])) + "_" + str(int(event[self.icustay_key]))
 
-                    icustay_id = event[self.icustay_key]
-                    if icustay_id in cohort_events:
+                    if key in cohort_events:
                         event = event.drop(
                             labels=[self.icustay_key, self.hadm_key, timestamp_key],
                             errors='ignore'
                         )
-                        event_string = []
+                        cols = []
+                        vals = []
                         # TODO process based on which embedding strategy is adopted: desc-based or code-based
-                        for name, val in event.to_dict().items():
+                        for col, val in event.to_dict().items():
                             if pd.isna(val):
                                 continue
                             # convert code to description if applicable
                             if (
                                 code_to_descriptions is not None
-                                and name in code_to_descriptions
+                                and col in code_to_descriptions
                             ):
-                                val = code_to_descriptions[name][val]
+                                val = code_to_descriptions[col][val]
 
                             if isinstance(val, (float, np.floating)):
                                 # NOTE round to 4 decimals
                                 val = round(val, 4)
 
-                            val = str(val).strip()
-                            event_string.append(" ".join([name, val]))
-                        event_string = " ".join(event_string)
+                            # NOTE if col / val contains numeric, split by digit place
+                            val_str = str(val).strip()
+                            val = ""
+                            prev_end = 0
+                            for matched in re.finditer(patterns_for_numeric, val_str):
+                                start, end = matched.span()
+                                val += val_str[prev_end:start] + " ".join(val_str[start:end])
+                                prev_end = end
+                            val += val_str[prev_end:]
 
-                        cohort_events[icustay_id].add(
+                            col_str = str(col).strip()
+                            col = ""
+                            prev_end = 0
+                            for matched in re.finditer(patterns_for_numeric, col_str):
+                                start, end = matched.span()
+                                col += col_str[prev_end:start] + " ".join(col_str[start:end])
+                                prev_end = end
+                            col += col_str[prev_end:]
+
+                            cols.append(col)
+                            vals.append(val)
+
+                        event_string = (cols, vals)
+
+                        cohort_events[key].add(
                             (charttime, fname[: -len(self.ext)], event_string)
                         )
         total = len(cohort_events)
@@ -480,12 +501,237 @@ class EHR(object):
             " (or no) corresponding medical events."
         )
 
-        self.cohort_events = cohort_events
         self.save_to_cache(
-            self.cohort_events, self.ehr_name + ".cohorts.labeled.events", use_pickle=True
+            cohort_events, self.ehr_name + ".cohorts.labeled.events", use_pickle=True
         )
 
         return cohort_events
+
+    def encode_events(self, cohort_events, cached=False):
+        # if cached:
+        #     encoded_events = self.load_from_cache(self.ehr_name + ".cohorts.labeled.events.encoded")
+        #     if encoded_events is not None:
+        #         self.encoded_events = encoded_events
+        #         return self.encoded_events
+        data_dir = os.path.join(self.dest, "data")
+
+        # XXX special tokens for the time interval (zero, last)
+        zero_time_interval = pd.Timedelta(0)
+        last_time_interval = pd.Timedelta(-1)
+
+        collated_timestamps = {
+            key: [event[0] for event in events]
+            for key, events in cohort_events.items()
+        }
+        # calc time interval to the next event (i, i+1)
+        time_intervals = {
+            key: np.subtract(t[1:], t[:-1])
+            for key, t in collated_timestamps.items()
+        }
+        # exclude zero time intervals for quantizing
+        time_intervals_flattened = {
+            k: v[v != zero_time_interval] for k, v in time_intervals.items()
+        }
+        time_intervals_flattened = np.sort(
+            np.concatenate([v for v in time_intervals_flattened.values()])
+        )
+
+        # XXX append "special" time interval for the last event
+        time_intervals = {
+            k: np.append(v, last_time_interval) for k, v in time_intervals.items()
+        }
+
+        # XXX exclude +- 1%?
+        bins = np.arange(self.bins + 1)
+        bins = bins / bins[-1]
+        bins = np.quantile(time_intervals_flattened, bins)
+
+        self.add_special_tokens(
+            ["[TIME_INT_ZERO]", "[TIME_INT_LAST]"]
+            + ["[TIME_INT_{}]".format(i) for i in range(1, len(bins))]
+        )
+
+        def _quantize(t: pd.Timedelta):
+            if t == zero_time_interval:
+                return self.special_tokens_dict["[TIME_INT_ZERO]"]
+            elif t == last_time_interval:
+                return self.special_tokens_dict["[TIME_INT_LAST]"]
+            for i, b in enumerate(bins[1:], start=1):
+                if t <= b:
+                    return self.special_tokens_dict["[TIME_INT_{}]".format(i)]
+
+            raise AssertionError("???")
+
+        time_intervals = {
+            k: map(_quantize, v) for k, v in time_intervals.items()
+        }
+
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT", use_fast=True)
+        tokenizer.add_special_tokens({
+            "additional_special_tokens": list(self.special_tokens_dict.values())
+        })
+        cls_token_id = tokenizer.encode("[CLS]")
+        sep_token_id = tokenizer.encode("[SEP]")
+
+        encoded_events = {
+            k: [
+                (event[1], event[2], t_int)
+                for event, t_int in zip(v, time_intervals[k])
+            ]
+            for k, v in cohort_events.items()
+        }
+
+        del collated_timestamps
+        del time_intervals_flattened
+        del time_intervals
+
+        """
+        1) we can batch_encode list of table_names / list of event_strings / list of time_intervals
+        2) recover events: list of [tokenized(table_name), tokenized(event_string), [TIME_INT_{}]]
+            for zip(table_names, event_strings, time_intervals, ...)]
+        3) assign token type embeddings
+        4) assign digit place embeddings (only for event_string, otherwise 0)
+        4) flatten events: list of [tokenized(table_name, event_string), [TIME_INT_{}]] (token type embedding + dpe embedding)
+            4-1) (for flattened structure) flatten them: if flattened size > self.max_token_size,
+            4-2) calculate number of events for the corresponding icustay --> num_events
+            4-3) while i
+                4-3-1) get the next index where token type == "[TIME]"
+                4-3-2) if flattened_size - index <= self.max_token_size: break
+                        otherwise, loop
+            4-4) num_events -= i, flattened = flattened[-(flattened_size - index):], hier = hier[-(num_events):]
+        5) prepend [CLS], append [SEP] for each hierarchical event, for each flattened event
+        """
+
+        rand = random.Random(self.seed)
+        manifest_dir = os.path.join(self.dest, "manifest")
+
+        # TODO digit_place_embeddings = dict()
+        token_type_embeddings = dict()
+
+        with open(os.path.join(dest_dir, "train.tsv"), "w") as train_f, open(
+            os.path.join(dest_dir, "valid.tsv"), "w") as valid_f, open(
+            os.path.join(dest_dir, "test.tsv"), "w"
+        ) as test_f:
+            print(data_dir, file=train_f)
+            print(data_dir, file=valid_f)
+            print(data_dir, file=test_f)
+
+            for hadm_icustay, events_per_icustay in encoded_events.items():
+                # make list of table names
+                table_names = [x[0] for x in events_per_icustay]
+                # tokenize table names
+                table_names_tokenized = tokenizer(table_names, add_special_tokens=False).input_ids
+                # generate the same shape list filled with self.table_type_id
+                table_type_tokens = [[self.table_type_id] * len(x) for x in table_names_tokenized]
+
+                # make list of events: (cols, vals)
+                event_strings = [x[1] for x in events_per_icustay] # list of (List[cols], List[vals])
+
+                # tokenize column names
+                # cols_tokenized: List[List[List[col_tokens]]]
+                #   e.g., cols_tokenized[event_i][col_j]: list of tokens of j-th column names of i-th event
+                cols_tokenized = [tokenizer(x[0], add_special_tokens=False).input_ids for x in event_strings]
+                # generate the same shape list filled with self.column_type_id
+                column_type_tokens = [[[self.column_type_id] * len(y) for y in x] for x in cols_tokenized]
+
+                # tokenize column values
+                # vals_tokenized: List[List[List[val_tokens]]]
+                #   e.g., vals_tokenized[event_i][col_j]: list of tokens of j-th column values of i-th event
+                vals_tokenized = [tokenizer(x[1], add_special_tokens=False).input_ids for x in event_strings]
+                # generate the same shape list filled with self.value_type_id
+                value_type_tokens = [[[self.value_type_id] * len(y) for y in x] for x in vals_tokenized]
+
+                # linearize column names & values as well as token types
+                # events_tokenized: List[List[tokens]]
+                #   e.g., events_tokenized[event_i]: list of tokens of i-th event such as
+                #       [col0, val0, col1, val1, ...]
+                # col_val_type_tokens: the same shape list with events_tokenized filled
+                #   with corresponding token type ids
+                events_tokenized = []
+                col_val_type_tokens = []
+                for cols, vols, col_type_tokens, val_type_tokens in zip(
+                    cols_tokenized, vals_tokenized, column_type_tokens, value_type_tokens
+                ):
+                    event_tokenized = []
+                    col_val_type_token = []
+                    for col, vol, col_type_token, val_type_token in zip(
+                        cols, vols, col_type_tokens, val_type_tokens
+                    ):
+                        event_tokenized.extend(col + vol)
+                        col_val_type_token.extend(col_type_token + val_type_token)
+
+                    events_tokenized.append(event_tokenized)
+                    col_val_type_tokens.append(col_val_type_token)
+
+                # make list of time intervals
+                time_intervals = [x[2] for x in events_per_icustay]
+                # tokenize time intervals
+                # this should yield a corresponding special token id for each time interval
+                time_intervals_tokenized = tokenizer(time_intervals, add_special_tokens=False).input_ids
+                # generate the same shape list filled with self.timeint_type_id
+                timeint_type_tokens = [[self.timeint_type_id] for _ in time_intervals_tokenized]
+
+                # encoded_events[hadm_icustay]: sequence of tokenized events [table_name, event_strings, time_interval]
+                #   List[List[tokens]], where encoded_events[hadm_icustay][i] is a sequence of input ids for i-th event of hadm_icustay
+                # token_type_embeddings[ocustay]: corresponding token type ids
+                # NOTE prepend [CLS], append [SEP] here (temporarily only for hierarchical)
+                encoded_events[hadm_icustay] = [
+                    [cls_token_id] + table_name + event + time_interval + [sep_token_id]
+                    for table_name, event, time_interval
+                    in zip(table_names_tokenized, events_tokenized, time_intervals_tokenized)
+                ]
+                token_type_embeddings[hadm_icustay] = [
+                    [self.cls_type_id] + table_type_token + col_val_type_token + timeint_type_token + [self.sep_type_id]
+                    for table_type_token, col_val_type_token, timeint_type_token
+                    in zip(table_type_tokens, col_val_type_tokens, timeint_type_tokens)
+                ]
+                # TODO define digit_place_embeddings[hadm_icustay] for encoded_events[hadm_icustay][...] here
+
+                # TODO if flattened input, process more ...
+                # encoded_events = {
+                #     k: " ".join(v) for k, v in encoded_events.items()
+                # }
+
+                # save to data directory
+                np.save(
+                    os.path.join(data_dir, "input_ids", hadm_icustay),
+                    np.array(encoded_events[hadm_icustay], dtype=object)
+                )
+                np.save(
+                    os.path.join(data_dir, "token_type_ids", hadm_icustay),
+                    np.array(token_type_embeddings[hadm_icustay], dtype=object)
+                )
+                # TODO save digit place embeddings
+                # np.save(
+                #     os.path.join(data_dir, "digit_place_ids", hadm_icustay),
+                #     np.array(digit_place_embeddings[hadm_icustay], dtype=object)
+                # )
+
+                # manifest
+                p = rand.random()
+                if self.valid_percent * 2 <= p:
+                    dest = train_f
+                elif self.valid_percent <= p:
+                    dest = valid_f
+                else:
+                    dest = test_f
+                
+                print(
+                    f"{hadm_icustay}\t{len(encoded_events[hadm_icustay])}", file=dest
+                )
+
+        logger.info("Done encoding events.")
+
+        # NOTE return hierarchical input
+        return encoded_events
+
+    def run_pipeline(self) -> None:
+        cohorts = self.build_cohorts(cached=self.cache)
+        labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
+        cohort_events = self.prepare_events(labeled_cohorts, cached=self.cache)
+        encoded_events = self.encode_events(cohort_events, cached=self.cache)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
