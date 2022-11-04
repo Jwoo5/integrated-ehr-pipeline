@@ -1,5 +1,6 @@
 import sys
 import os
+import random
 import re
 import shutil
 import glob
@@ -452,17 +453,19 @@ class EHR(object):
                             ):
                                 val = code_to_descriptions[col][val]
 
-                            if isinstance(val, (float, np.floating)):
-                                # NOTE round to 4 decimals
-                                val = round(val, 4)
-
                             # NOTE if col / val contains numeric, split by digit place
                             val_str = str(val).strip()
                             val = ""
                             prev_end = 0
                             for matched in re.finditer(patterns_for_numeric, val_str):
                                 start, end = matched.span()
-                                val += val_str[prev_end:start] + " ".join(val_str[start:end])
+                                # NOTE round to 4 decimals
+                                numeric = float(val_str[start:end])
+                                numeric = round(numeric, 4)
+                                numeric = str(int(numeric)) if numeric.is_integer() else str(numeric)
+
+                                # possible to duplicate unnecessary white space but it's okay
+                                val += val_str[prev_end:start] + " " + numeric + " "
                                 prev_end = end
                             val += val_str[prev_end:]
 
@@ -471,7 +474,13 @@ class EHR(object):
                             prev_end = 0
                             for matched in re.finditer(patterns_for_numeric, col_str):
                                 start, end = matched.span()
-                                col += col_str[prev_end:start] + " ".join(col_str[start:end])
+                                # NOTE round to 4 decimals
+                                numeric = float(col_str[start:end])
+                                numeric = round(numeric, 4)
+                                numeric = str(int(numeric)) if numeric.is_integer() else str(numeric)
+
+                                # possible to duplicate unnecessary white space but it's okay
+                                col += col_str[prev_end:start] + " " + numeric + " "
                                 prev_end = end
                             col += col_str[prev_end:]
 
