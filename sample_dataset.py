@@ -13,6 +13,9 @@ Sample Dataset for Integrated-EHR-Pipeline
 NOTE: The preprocessed token indices are stored as np.int16 type for efficienty,
         so overflow can be caused when vocab size > 32767.
  - ehr.cohort.labeled.index: dataframe pickle
+    - index: should be resetted by `df.reset_index()`
+    - [hi_start:hi_end] is the range of indices for the patient's history
+    - split: one of ['train', 'val', 'test']
  - ehr.data: .np file with np.int16 type, (num_total_events, 3, max_word_len)
     - second dimension
         - 0: input_ids
@@ -52,18 +55,25 @@ def get_parser():
         "--max_word_len",
         type=int,
         default=128,
-        help="Maximum token length for each event",
+        help="Maximum token length for each event for Hi",
     )
     parser.add_argument(
         "--max_event_len",
         type=int,
         default=256,
-        help="Maximum number of events to consider",
+        help="Maximum number of events to consider for Hi",
     )
+    parser.add_argument(
+        "--max_seq_len",
+        type=int,
+        default=8192,
+        help="Maximum sequence length for Flat",
+    )
+
     return parser
 
 
-class EHRDataset(Dataset):
+class BaseEHRDataset(Dataset):
     def __init__(self, args, split):
         super().__init__()
 
@@ -71,30 +81,13 @@ class EHRDataset(Dataset):
         df_path = os.path.join(args.data, f"{args.ehr}.cohorts.labeled.index")
         self.df = pd.read_pickle(df_path)
         self.df = self.df[self.df["split"] == split]
-        self.data_path = os.path.join(args.data, f"{args.ehr}.data.npy")
+        self.data_path = None
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
-        # NOTE: Warning occurs when converting np.int16 read-only array into tensor, but ignoreable
-        row = self.df.iloc[idx]
-
-        assert row["end"] - row["start"] <= self.args.max_event_len
-
-        data = np.memmap(
-            self.data_path,
-            dtype=np.int16,
-            shape=(row["end"] - row["start"], 3, self.args.max_word_len),
-            mode="r",
-            offset=row["start"] * 3 * 2 * self.args.max_word_len,  # np.int16 = 2 bytes
-        )
-        return {
-            "input_ids": torch.IntTensor(data[:, 0, :]),
-            "type_ids": torch.IntTensor(data[:, 1, :]),
-            "dpe_ids": torch.IntTensor(data[:, 2, :]),
-            "label": row[self.args.pred_target],
-        }
+        raise NotImplementedError()
 
     def collate_fn(self, out):
         ret = dict()
@@ -117,3 +110,53 @@ class EHRDataset(Dataset):
                 else:
                     ret[k] = pad_sequence([i[k] for i in out], batch_first=True)
         return ret
+
+
+class HierarchicalEHRDataset(BaseEHRDataset):
+    def __init__(self, args, split):
+        super().__init__(args, split)
+        self.data_path = os.path.join(args.data, f"{args.ehr}.hi.npy")
+
+    def __getitem__(self, idx):
+        # NOTE: Warning occurs when converting np.int16 read-only array into tensor, but ignoreable
+        row = self.df.iloc[idx]
+
+        assert row["hi_end"] - row["hi_start"] <= self.args.max_event_len
+
+        data = np.memmap(
+            self.data_path,
+            dtype=np.int16,
+            shape=(row["hi_end"] - row["hi_start"], 3, self.args.max_word_len),
+            mode="r",
+            offset=row["hi_start"] * 3 * 2 * self.args.max_word_len,
+        )
+        return {
+            "input_ids": torch.IntTensor(data[:, 0, :]),
+            "type_ids": torch.IntTensor(data[:, 1, :]),
+            "dpe_ids": torch.IntTensor(data[:, 2, :]),
+            "label": row[self.args.pred_target],
+        }
+
+
+class FlattenEHRDataset(BaseEHRDataset):
+    def __init__(self, args, split):
+        super().__init__(args, split)
+        self.data_path = os.path.join(args.data, f"{args.ehr}.flat.npy")
+
+    def __getitem__(self, idx):
+        # NOTE: Warning occurs when converting np.int16 read-only array into tensor, but ignoreable
+        row = self.df.iloc[idx]
+
+        data = np.memmap(
+            self.data_path,
+            dtype=np.int16,
+            shape=(3, self.args.max_seq_len),
+            mode="r",
+            offset=row.index * 3 * 2 * self.args.max_seq_len,
+        )
+        return {
+            "input_ids": torch.IntTensor(data[0, :]),
+            "type_ids": torch.IntTensor(data[1, :]),
+            "dpe_ids": torch.IntTensor(data[2, :]),
+            "label": row[self.args.pred_target],
+        }
