@@ -1,11 +1,9 @@
 import os
 import logging
-import glob
 import treelib
 from collections import Counter
-
 import pandas as pd
-import numpy as np
+import glob
 
 from ehrs import register_ehr, EHR
 
@@ -262,3 +260,18 @@ class eICU(EHR):
                     break
 
         return str2cat
+
+    def infer_data_extension(self) -> str:
+        if (len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 31):
+            ext = ".csv.gz"
+        elif (len(glob.glob(os.path.join(self.data_dir, "*.csv"))) == 31):
+            ext = ".csv"
+        else:
+            raise AssertionError(
+                "Provided data directory is not correct. Please check if --data is correct. "
+                "--data: {}".format(self.data_dir)
+            )
+
+        logger.info("Data extension is set to '{}'".format(ext))
+
+        return ext

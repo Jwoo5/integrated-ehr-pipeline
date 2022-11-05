@@ -1,13 +1,9 @@
 import os
 import logging
-import glob
-import pickle
-
 from datetime import datetime
 import numpy as np
 import pandas as pd
-
-from tqdm import tqdm
+import glob
 
 from ehrs import register_ehr, EHR
 
@@ -87,6 +83,11 @@ class MIMICIII(EHR):
                     "LINKORDERID",
                     "ROW_ID",
                     "SUBJECT_ID",
+                    "CONTINUEINNEXTDEPT",
+                    "CANCELREASON",
+                    "STATUSDESCRIPTION",
+                    "COMMENTS_CANCELEDBY",
+                    "COMMENTS_DATE"
                 ],
                 "code": ["ITEMID"],
                 "desc": ["D_ITEMS" + self.ext],
@@ -102,6 +103,7 @@ class MIMICIII(EHR):
                     "ORDERID",
                     "LINKORDERID",
                     "ROW_ID",
+                    "STOPPED",
                     "SUBJECT_ID",
                 ],
                 "code": ["ITEMID"],
@@ -230,3 +232,20 @@ class MIMICIII(EHR):
         ] = icustays.loc[~is_discharged_in_icu, "DISCHARGE_LOCATION"]
 
         return icustays
+
+
+    
+    def infer_data_extension(self) -> str:
+        if (len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 26):
+            ext = ".csv.gz"
+        elif (len(glob.glob(os.path.join(self.data_dir, "*.csv")))==26):
+            ext = ".csv"
+        else:
+            raise AssertionError(
+                "Provided data directory is not correct. Please check if --data is correct. "
+                "--data: {}".format(self.data_dir)
+            )
+
+        logger.info("Data extension is set to '{}'".format(ext))
+
+        return ext

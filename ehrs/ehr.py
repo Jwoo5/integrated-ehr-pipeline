@@ -56,6 +56,9 @@ class EHR(object):
             self.max_event_size,
         )
 
+        self.max_event_token_len = cfg.max_event_token_len
+        self.max_patient_token_len = cfg.max_patient_token_len
+
         self.max_age = cfg.max_age if cfg.max_age is not None else sys.maxsize
         self.min_age = cfg.min_age if cfg.min_age is not None else 0
         assert self.min_age <= self.max_age, (self.min_age, self.max_age)
@@ -84,6 +87,8 @@ class EHR(object):
         self.timeint_type_id = 3
         self.cls_type_id = 4
         self.sep_type_id = 5
+
+        self.others_dpe_id = 0
 
         self._icustay_fname = None
         self._patient_fname = None
@@ -179,8 +184,8 @@ class EHR(object):
         return cohorts
 
     # TODO process specific tasks according to user choice?
-    def prepare_tasks(self, cohorts=None, cached=False):
-        if cohorts is None and cached:
+    def prepare_tasks(self, cohorts, cached=False):
+        if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
                 return labeled_cohorts
@@ -312,10 +317,11 @@ class EHR(object):
         return labeled_cohorts
 
     def prepare_events(self, cohorts, cached=False):
-        if cohorts is None and cached:
-            cohort_events = self.load_from_cache(self.ehr_name + ".cohorts.labeled.events")
-            if cohort_events is not None:
-                return cohort_events
+        if cached:
+            cohorts = self.load_from_cache(self.ehr_name + ".events.cohorts")
+            cohort_events = self.load_from_cache(self.ehr_name + ".events.data")
+            if (cohorts is not None) and (cohort_events is not None):
+                return cohorts, cohort_events
             else:
                 raise RuntimeError()
 
@@ -332,11 +338,8 @@ class EHR(object):
 
         cohorts.drop(columns=["INTIME"], inplace=True)
 
-        cohort_events = {
-            id: SortedList() for id in cohorts[self.icustay_key].to_list()
-        }
-
-        patterns_for_numeric = re.compile("\d+(\.\d+)*")
+        cohort_events = {id: SortedList() for id in cohorts[self.icustay_key].to_list()}
+        patterns_for_numeric = re.compile(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)")
 
         for feat in self.features:
             fname = feat["fname"]
@@ -442,7 +445,6 @@ class EHR(object):
                         )
                         cols = []
                         vals = []
-                        # TODO process based on which embedding strategy is adopted: desc-based or code-based
                         for col, val in event.to_dict().items():
                             if pd.isna(val):
                                 continue
@@ -453,36 +455,8 @@ class EHR(object):
                             ):
                                 val = code_to_descriptions[col][val]
 
-                            # NOTE if col / val contains numeric, split by digit place
-                            val_str = str(val).strip()
-                            val = ""
-                            prev_end = 0
-                            for matched in re.finditer(patterns_for_numeric, val_str):
-                                start, end = matched.span()
-                                # NOTE round to 4 decimals
-                                numeric = float(val_str[start:end])
-                                numeric = round(numeric, 4)
-                                numeric = str(int(numeric)) if numeric.is_integer() else str(numeric)
-
-                                # possible to duplicate unnecessary white space but it's okay
-                                val += val_str[prev_end:start] + " " + numeric + " "
-                                prev_end = end
-                            val += val_str[prev_end:]
-
-                            col_str = str(col).strip()
-                            col = ""
-                            prev_end = 0
-                            for matched in re.finditer(patterns_for_numeric, col_str):
-                                start, end = matched.span()
-                                # NOTE round to 4 decimals
-                                numeric = float(col_str[start:end])
-                                numeric = round(numeric, 4)
-                                numeric = str(int(numeric)) if numeric.is_integer() else str(numeric)
-
-                                # possible to duplicate unnecessary white space but it's okay
-                                col += col_str[prev_end:start] + " " + numeric + " "
-                                prev_end = end
-                            col += col_str[prev_end:]
+                            val = re.sub(patterns_for_numeric, lambda x: str(round(float(x.group(0)), 4)) if x.group(0) != '.'*len(x.group(0)) else x.group(0), str(val))
+                            col = re.sub(patterns_for_numeric, lambda x: str(round(float(x.group(0)), 4)) if x.group(0) !='.'*len(x.group(0)) else x.group(0), str(col))
 
                             cols.append(col)
                             vals.append(val)
@@ -499,6 +473,8 @@ class EHR(object):
             if len(v) >= self.min_event_size
         }
         skipped = total - len(cohort_events)
+        # Should remove skipped patients from cohort
+        cohorts = cohorts[cohorts[self.icustay_key].isin(cohort_events.keys())].reset_index(drop=True)
 
         logger.info(
             "Done preparing events for the given cohorts."
@@ -507,18 +483,39 @@ class EHR(object):
         )
 
         self.save_to_cache(
-            cohort_events, self.ehr_name + ".cohorts.labeled.events", use_pickle=True
+            cohorts, self.ehr_name + ".events.cohorts", use_pickle=True
+        )
+        self.save_to_cache(
+            cohort_events, self.ehr_name + ".events.data", use_pickle=True
         )
 
-        return cohort_events
+        return cohorts, cohort_events
 
-    def encode_events(self, cohort_events, cached=False):
+    def encode_events(self, cohorts, cohort_events, cached=False):
         # if cached:
         #     encoded_events = self.load_from_cache(self.ehr_name + ".cohorts.labeled.events.encoded")
         #     if encoded_events is not None:
         #         self.encoded_events = encoded_events
         #         return self.encoded_events
-        data_dir = os.path.join(self.dest, "data")
+        total_events = sum([len(v) for v in cohort_events.values()])
+
+        hierarchical_data = np.memmap(
+            os.path.join(self.dest, f'{self.ehr_name}.hi.npy'),
+            dtype=np.int16,
+            mode='w+',
+            shape=(total_events, 3, self.max_event_token_len)
+        )
+        flatten_data = np.memmap(
+            os.path.join(self.dest, f'{self.ehr_name}.fl.npy'),
+            dtype=np.int16,
+            mode='w+',
+            shape=(len(cohorts),3, self.max_patient_token_len)
+        )
+
+        # Reset cohort index for flatten data indexing
+        cohorts.reset_index(drop=True, inplace=True)
+        cohorts.reset_index(inplace=True, names='fl_index')
+        hierarchical_data_index = 0
 
         # XXX special tokens for the time interval (zero, last)
         zero_time_interval = pd.Timedelta(0)
@@ -577,8 +574,8 @@ class EHR(object):
         tokenizer.add_special_tokens({
             "additional_special_tokens": list(self.special_tokens_dict.values())
         })
-        cls_token_id = tokenizer.encode("[CLS]")
-        sep_token_id = tokenizer.encode("[SEP]")
+        cls_token_id = tokenizer.encode("[CLS]")[1]
+        sep_token_id = tokenizer.encode("[SEP]")[1]
 
         encoded_events = {
             k: [
@@ -610,122 +607,189 @@ class EHR(object):
         """
 
         rand = random.Random(self.seed)
-        manifest_dir = os.path.join(self.dest, "manifest")
 
-        # TODO digit_place_embeddings = dict()
-        token_type_embeddings = dict()
+        for icustay_idx, items in enumerate(encoded_events.items()):
+            icustay_id, events_per_icustay = items
+            # make list of table names
+            table_names = [x[0] for x in events_per_icustay]
+            # tokenize table names
+            table_names_tokenized = tokenizer(table_names, add_special_tokens=False).input_ids
+            # generate the same shape list filled with self.table_type_id
+            table_type_tokens = [[self.table_type_id] * len(x) for x in table_names_tokenized]
+            table_dpe_tokens = [[self.others_dpe_id] * len(x) for x in table_names_tokenized]
+            # make list of events: (cols, vals)
+            event_strings = [x[1] for x in events_per_icustay] # list of (List[cols], List[vals])
 
-        with open(os.path.join(dest_dir, "train.tsv"), "w") as train_f, open(
-            os.path.join(dest_dir, "valid.tsv"), "w") as valid_f, open(
-            os.path.join(dest_dir, "test.tsv"), "w"
-        ) as test_f:
-            print(data_dir, file=train_f)
-            print(data_dir, file=valid_f)
-            print(data_dir, file=test_f)
+            # tokenize column names
+            # cols_tokenized: List[List[List[col_tokens]]]
+            #   e.g., cols_tokenized[event_i][col_j]: list of tokens of j-th column names of i-th event
 
-            for icustay_id, events_per_icustay in encoded_events.items():
-                # make list of table names
-                table_names = [x[0] for x in events_per_icustay]
-                # tokenize table names
-                table_names_tokenized = tokenizer(table_names, add_special_tokens=False).input_ids
-                # generate the same shape list filled with self.table_type_id
-                table_type_tokens = [[self.table_type_id] * len(x) for x in table_names_tokenized]
+            cols, col_number_groups_list = zip(
+                *[self.split_and_get_number_groups(x[0]) for x in event_strings]
+            )
+            vals, val_number_groups_list = zip(
+                *[self.split_and_get_number_groups(x[1]) for x in event_strings]
+            )
 
-                # make list of events: (cols, vals)
-                event_strings = [x[1] for x in events_per_icustay] # list of (List[cols], List[vals])
+            cols_tokenized = [
+                tokenizer(x, add_special_tokens=False).input_ids for x in cols
+            ]
+            # generate the same shape list filled with self.column_type_id
+            column_type_tokens = [
+                [[self.column_type_id] * len(y) for y in x] for x in cols_tokenized
+            ]
+            column_dpe_tokens = self.get_dpe(cols_tokenized, col_number_groups_list)
 
-                # tokenize column names
-                # cols_tokenized: List[List[List[col_tokens]]]
-                #   e.g., cols_tokenized[event_i][col_j]: list of tokens of j-th column names of i-th event
-                cols_tokenized = [tokenizer(x[0], add_special_tokens=False).input_ids for x in event_strings]
-                # generate the same shape list filled with self.column_type_id
-                column_type_tokens = [[[self.column_type_id] * len(y) for y in x] for x in cols_tokenized]
-
-                # tokenize column values
-                # vals_tokenized: List[List[List[val_tokens]]]
-                #   e.g., vals_tokenized[event_i][col_j]: list of tokens of j-th column values of i-th event
-                vals_tokenized = [tokenizer(x[1], add_special_tokens=False).input_ids for x in event_strings]
-                # generate the same shape list filled with self.value_type_id
-                value_type_tokens = [[[self.value_type_id] * len(y) for y in x] for x in vals_tokenized]
-
-                # linearize column names & values as well as token types
-                # events_tokenized: List[List[tokens]]
-                #   e.g., events_tokenized[event_i]: list of tokens of i-th event such as
-                #       [col0, val0, col1, val1, ...]
-                # col_val_type_tokens: the same shape list with events_tokenized filled
-                #   with corresponding token type ids
-                events_tokenized = []
-                col_val_type_tokens = []
-                for cols, vols, col_type_tokens, val_type_tokens in zip(
-                    cols_tokenized, vals_tokenized, column_type_tokens, value_type_tokens
+            # tokenize column values
+            # vals_tokenized: List[List[List[val_tokens]]]
+            #   e.g., vals_tokenized[event_i][col_j]: list of tokens of j-th column values of i-th event
+            vals_tokenized = [
+                tokenizer(x, add_special_tokens=False).input_ids for x in vals
+            ]
+            # generate the same shape list filled with self.value_type_id
+            value_type_tokens = [
+                [[self.value_type_id] * len(y) for y in x] for x in vals_tokenized
+            ]
+            value_dpe_tokens = self.get_dpe(vals_tokenized, val_number_groups_list)
+            # linearize column names & values as well as token types
+            # events_tokenized: List[List[tokens]]
+            #   e.g., events_tokenized[event_i]: list of tokens of i-th event such as
+            #       [col0, val0, col1, val1, ...]
+            # col_val_type_tokens: the same shape list with events_tokenized filled
+            #   with corresponding token type ids
+            events_tokenized = []
+            col_val_type_tokens = []
+            col_val_dpe_tokens = []
+            for (
+                cols, vals, col_type_tokens, val_type_tokens, col_dpe_tokens, val_dpe_tokens, table_name_tokenized
+            ) in zip(
+                cols_tokenized, vals_tokenized, column_type_tokens, value_type_tokens, column_dpe_tokens, value_dpe_tokens, table_names_tokenized
+            ):
+                event_tokenized = []
+                col_val_type_token = []
+                col_val_dpe_token = []
+                max_len = self.max_event_token_len - len(table_name_tokenized) - 3 # 3 for [CLS], [SEP], [TIME]
+                for (
+                    col, val, col_type_token, val_type_token, col_dpe_token, val_dpe_token,
+                ) in zip(
+                    cols, vals, col_type_tokens, val_type_tokens, col_dpe_tokens, val_dpe_tokens,
                 ):
-                    event_tokenized = []
-                    col_val_type_token = []
-                    for col, vol, col_type_token, val_type_token in zip(
-                        cols, vols, col_type_tokens, val_type_tokens
-                    ):
-                        event_tokenized.extend(col + vol)
-                        col_val_type_token.extend(col_type_token + val_type_token)
+                    # Should stop when the length over max_event_token_len
+                    if len(event_tokenized) + len(col) + len(val) > max_len:
+                        break
+                    event_tokenized.extend(col + val)
+                    col_val_type_token.extend(col_type_token + val_type_token)
+                    col_val_dpe_token.extend(col_dpe_token + val_dpe_token)
 
-                    events_tokenized.append(event_tokenized)
-                    col_val_type_tokens.append(col_val_type_token)
+                events_tokenized.append(event_tokenized)
+                col_val_type_tokens.append(col_val_type_token)
+                col_val_dpe_tokens.append(col_val_dpe_token)
 
-                # make list of time intervals
-                time_intervals = [x[2] for x in events_per_icustay]
-                # tokenize time intervals
-                # this should yield a corresponding special token id for each time interval
-                time_intervals_tokenized = tokenizer(time_intervals, add_special_tokens=False).input_ids
-                # generate the same shape list filled with self.timeint_type_id
-                timeint_type_tokens = [[self.timeint_type_id] for _ in time_intervals_tokenized]
+            # make list of time intervals
+            time_intervals = [x[2] for x in events_per_icustay]
+            # tokenize time intervals
+            # this should yield a corresponding special token id for each time interval
+            time_intervals_tokenized = tokenizer(
+                time_intervals, add_special_tokens=False
+            ).input_ids
+            # generate the same shape list filled with self.timeint_type_id
+            timeint_type_tokens = [
+                [self.timeint_type_id] for _ in time_intervals_tokenized
+            ]
+            timeint_dpe_tokens = [[self.others_dpe_id] for _ in time_intervals_tokenized]
 
-                # encoded_events[icustay_id]: sequence of tokenized events [table_name, event_strings, time_interval]
-                #   List[List[tokens]], where encoded_events[icustay_id][i] is a sequence of input ids for i-th event of icustay_id
-                # token_type_embeddings[ocustay]: corresponding token type ids
-                # NOTE prepend [CLS], append [SEP] here (temporarily only for hierarchical)
-                encoded_events[icustay_id] = [
-                    [cls_token_id] + table_name + event + time_interval + [sep_token_id]
-                    for table_name, event, time_interval
-                    in zip(table_names_tokenized, events_tokenized, time_intervals_tokenized)
-                ]
-                token_type_embeddings[icustay_id] = [
-                    [self.cls_type_id] + table_type_token + col_val_type_token + timeint_type_token + [self.sep_type_id]
-                    for table_type_token, col_val_type_token, timeint_type_token
-                    in zip(table_type_tokens, col_val_type_tokens, timeint_type_tokens)
-                ]
-                # TODO define digit_place_embeddings[icustay_id] for encoded_events[icustay_id][...] here
+            # encoded_events[icustay_id]: sequence of tokenized events [table_name, event_strings, time_interval]
+            #   List[List[tokens]], where encoded_events[icustay_id][i] is a sequence of input ids for i-th event of icustay_id
+            # token_type_embeddings[ocustay]: corresponding token type ids
 
-                # TODO if flattened input, process more ...
-                # encoded_events = {
-                #     k: " ".join(v) for k, v in encoded_events.items()
-                # }
+            # NOTE: [CLS] and [SEP] only added at first/end of flatten input, but [TIME] inserted between events
+            flatten_lens = np.cumsum([len(i)+len(j)+1 for i,j in zip(table_names_tokenized, events_tokenized)])
+            event_length = len(table_names_tokenized)
+            if flatten_lens[-1] >8190:
+                # Should remove events
+                event_length = np.argmin(flatten_lens<=8190)
 
-                # save to data directory
-                np.save(
-                    os.path.join(data_dir, "input_ids", icustay_id),
-                    np.array(encoded_events[icustay_id], dtype=object)
-                )
-                np.save(
-                    os.path.join(data_dir, "token_type_ids", icustay_id),
-                    np.array(token_type_embeddings[icustay_id], dtype=object)
-                )
-                # TODO save digit place embeddings
-                # np.save(
-                #     os.path.join(data_dir, "digit_place_ids", icustay_id),
-                #     np.array(digit_place_embeddings[icustay_id], dtype=object)
-                # )
+            cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_start'] = hierarchical_data_index
+            cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_end'] = hierarchical_data_index + event_length
+            assert cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'fl_index'].values[0]==icustay_idx
 
-                # manifest
-                p = rand.random()
-                if self.valid_percent * 2 <= p:
-                    dest = train_f
-                elif self.valid_percent <= p:
-                    dest = valid_f
-                else:
-                    dest = test_f
-                
-                print(
-                    f"{icustay_id}\t{len(encoded_events[icustay_id])}", file=dest
-                )
+            hi_input = [
+                [cls_token_id] + table_name + event + time_interval + [sep_token_id]
+                for event_idx, table_name, event, time_interval in zip(
+                    range(len(table_names_tokenized)),
+                    table_names_tokenized,
+                    events_tokenized,
+                    time_intervals_tokenized,
+                ) if event_idx < event_length
+            ]
+            hi_type = [
+                [self.cls_type_id] + table_type_token + col_val_type_token + timeint_type_token + [self.sep_type_id]
+                for event_idx, table_type_token, col_val_type_token, timeint_type_token in zip(
+                    range(len(table_names_tokenized)), table_type_tokens, col_val_type_tokens, timeint_type_tokens
+                ) if event_idx < event_length
+            ]
+            hi_dpe = [
+                [self.others_dpe_id] + table_dpe_token + col_val_dpe_token + timeint_dpe_token + [self.others_dpe_id]
+                for event_idx, table_dpe_token, col_val_dpe_token, timeint_dpe_token in zip(
+                    range(len(table_names_tokenized)), table_dpe_tokens, col_val_dpe_tokens, timeint_dpe_tokens
+                ) if event_idx < event_length                
+            ]
+            
+            fl_input = (
+                [cls_token_id]
+                + [j for i in [table_name + event + time_interval for event_idx, table_name, event, time_interval in zip(
+                        range(len(table_names_tokenized)), table_names_tokenized, events_tokenized, time_intervals_tokenized,
+                    ) if event_idx < event_length] for j in i]
+                + [sep_token_id]
+            )
+
+            fl_type = (
+                [self.cls_type_id]
+                + [j for i in [table_type_token + col_val_type_token + timeint_type_token for event_idx, table_type_token, col_val_type_token, timeint_type_token in zip(
+                        range(len(table_names_tokenized)), table_type_tokens, col_val_type_tokens, timeint_type_tokens,
+                    ) if event_idx < event_length] for j in i]
+                + [self.sep_type_id]
+            )
+
+            fl_dpe = (
+                [self.others_dpe_id]
+                + [j for i in [table_dpe_token + col_val_dpe_token + timeint_dpe_token for event_idx, table_dpe_token, col_val_dpe_token, timeint_dpe_token in zip(
+                        range(len(table_names_tokenized)), table_dpe_tokens, col_val_dpe_tokens, timeint_dpe_tokens,
+                    ) if event_idx < event_length] for j in i]
+                + [self.others_dpe_id]
+            )
+
+            assert all([len(i)<=self.max_event_token_len for i in hi_input])
+            assert len(fl_input) <= self.max_patient_token_len
+
+            # Add padding to save as numpy array
+            hi_input = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_input])
+            hi_type = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_type])
+            hi_dpe = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_dpe])
+
+            fl_input = np.pad(fl_input, (0, self.max_patient_token_len - len(fl_input)), mode='constant')
+            fl_type = np.pad(fl_type, (0, self.max_patient_token_len - len(fl_type)), mode='constant')
+            fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
+            
+            # Save data into memmap format
+            hierarchical_data[hierarchical_data_index:hierarchical_data_index + event_length, :, :] = np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16)
+            hierarchical_data_index+=event_length
+
+            flatten_data[icustay_idx, :, :] = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16)
+
+            hierarchical_data.flush()
+            flatten_data.flush()
+
+            p = rand.random()
+            if self.valid_percent * 2 <= p:
+                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'split'] = 'train'
+            elif self.valid_percent <= p:
+                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'split'] = 'valid'
+            else:
+                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'split'] = 'test'
+        
+
+        cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'))
 
         logger.info("Done encoding events.")
 
@@ -735,8 +799,8 @@ class EHR(object):
     def run_pipeline(self) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
-        cohort_events = self.prepare_events(labeled_cohorts, cached=self.cache)
-        encoded_events = self.encode_events(cohort_events, cached=self.cache)
+        cohorts, cohort_events = self.prepare_events(labeled_cohorts, cached=self.cache)
+        encoded_events = self.encode_events(cohorts, cohort_events, cached=self.cache)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
@@ -747,7 +811,7 @@ class EHR(object):
         for new_special_token in new_special_tokens:
             if new_special_token in self.special_tokens_dict:
                 overlapped.append(new_special_token)
-        
+
         if len(overlapped) > 0:
             logger.warn(
                 "There are some tokens that have already been set to special tokens."
@@ -812,21 +876,7 @@ class EHR(object):
             return None
 
     def infer_data_extension(self, threshold=10) -> str:
-        ext = None
-        if len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) >= threshold:
-            ext = ".csv.gz"
-        elif len(glob.glob(os.path.join(self.data_dir, ".csv"))) >= threshold:
-            ext = ".csv"
-
-        if ext is None:
-            raise AssertionError(
-                "Cannot infer data extension from {}. ".format(self.data_dir)
-                + "Please provide --ext explicitly."
-            )
-
-        logger.info("Data extension is set to '{}'".format(ext))
-
-        return ext
+        raise NotImplementedError()
 
     def download_ehr_from_url(self, url, dest) -> None:
         username = input("Email or Username: ")
@@ -882,3 +932,77 @@ class EHR(object):
                 "-P", dest,
             ]
         )
+
+    """
+    input:
+        row: List[str], columns or values of an event
+    output:
+        splitteds: List[str]
+        number_groups_list: List[List[int]]
+    """
+    def split_and_get_number_groups(self, row):
+        splitted_list = []
+        number_groups_list = []
+
+        for data in row:
+            # Use regex to find all int/floats in the string
+            number_groups = [
+                group
+                for group in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", data)
+            ]
+            number_groups_list.append(number_groups)
+            splitted_list.append(re.sub(r"([0-9\.])", r" \1 ", data))
+
+        return splitted_list, number_groups_list
+
+    """
+    input:
+        data_tokenized: List[List[List[int]]]
+        data_number_groups_list: List[List[List[int]]]
+    output:
+        dpe: List[List[List[int]]]
+    cf. numerical values are already rounded into 4 digits
+    Not Digit/Padding -> 0
+    if original string is '1111.1111 aaa'-> '987654321 000'
+    
+    """
+    # Case 1. '2 5', '25'
+    # Case 2. Too long number
+    def get_dpe(self, data_tokenized, data_number_groups_list) -> list:
+
+        number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]  # [0-9\.]
+        dpes = []
+        for event_id, number_groups_list in zip(
+            data_tokenized, data_number_groups_list
+        ):
+            event_dpes = []
+            for data_id, number_groups in zip(event_id, number_groups_list):
+                numbers = [i for i, j in enumerate(data_id) if j in number_ids]
+                numbers_cnt = 0
+                data_dpe = [0] * len(data_id)
+                for group in number_groups:
+                    if group[0] == "." * len(group[0]):
+                        numbers_cnt += len(group[0])
+                        continue
+
+                    start = numbers[numbers_cnt]
+                    end = numbers[numbers_cnt + len(group[0]) - 1] + 1
+                    corresponding_numbers = data_id[start:end]
+                    digits = [i for i, j in enumerate(corresponding_numbers) if j==119]
+
+                    # Case Integer
+                    if len(digits) == 0:
+                        data_dpe[start:end] = list(range(len(group) + 5, 5, -1))
+                    # Case Float
+                    if len(digits) == 1:
+                        digit_idx = len(group[0]) - digits[0]
+                        data_dpe[start:end] = list(
+                            range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
+                        )
+                    else:
+                        breakpoint()
+
+                    numbers_cnt += len(group[0])
+                event_dpes.append(data_dpe)
+            dpes.append(event_dpes)
+        return dpes

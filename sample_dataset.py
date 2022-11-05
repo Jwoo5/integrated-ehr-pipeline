@@ -52,24 +52,17 @@ def get_parser():
         help="Prediction target",
     )
     parser.add_argument(
-        "--max_word_len",
-        type=int,
-        default=128,
-        help="Maximum token length for each event for Hi",
+        "--max_event_size", type=int, default=256, help="max event size to crop to"
     )
     parser.add_argument(
-        "--max_event_len",
-        type=int,
-        default=256,
-        help="Maximum number of events to consider for Hi",
-    )
-    parser.add_argument(
-        "--max_seq_len",
-        type=int,
-        default=8192,
-        help="Maximum sequence length for Flat",
+        '--max_event_token_len', type=int, default=128,
+        help='max token length for each event (Hierarchical)'
     )
 
+    parser.add_argument(
+        '--max_patient_token_len', type=int, default=8192,
+        help='max token length for each patient (Flatten)'
+    )
     return parser
 
 
@@ -82,6 +75,38 @@ class BaseEHRDataset(Dataset):
         self.df = pd.read_pickle(df_path)
         self.df = self.df[self.df["split"] == split]
         self.data_path = None
+
+        self.num_classes = {
+            "mimiciii": {
+                "mortality": 2,
+                "readmission": 2,
+                "los_3day": 2,
+                "los_7day": 2,
+                "final_acuity": 18,
+                "imminent_discharge": 18,
+                "diagnosis": 18,
+            },
+            "mimiciv": {
+                "mortality": 2,
+                "readmission": 2,
+                "los_3day": 2,
+                "los_7day": 2,
+                "final_acuity": 14,
+                "imminent_discharge": 14,
+                "diagnosis": 18,
+            },            
+            "eicu": {
+                "mortality": 2,
+                "readmission": 2,
+                "los_3day": 2,
+                "los_7day": 2,
+                "final_acuity": 9,
+                "imminent_discharge": 9,
+                "diagnosis": 18,
+            }
+
+        }[self.args.ehr][self.args.pred_target]
+
 
     def __len__(self):
         return len(self.df)
@@ -121,14 +146,14 @@ class HierarchicalEHRDataset(BaseEHRDataset):
         # NOTE: Warning occurs when converting np.int16 read-only array into tensor, but ignoreable
         row = self.df.iloc[idx]
 
-        assert row["hi_end"] - row["hi_start"] <= self.args.max_event_len
+        assert row["hi_end"] - row["hi_start"] <= self.args.max_event_size
 
         data = np.memmap(
             self.data_path,
             dtype=np.int16,
-            shape=(row["hi_end"] - row["hi_start"], 3, self.args.max_word_len),
+            shape=(row["hi_end"] - row["hi_start"], 3, self.args.max_event_token_len),
             mode="r",
-            offset=row["hi_start"] * 3 * 2 * self.args.max_word_len,
+            offset=row["hi_start"] * 3 * 2 * self.args.max_event_token_len,
         )
         return {
             "input_ids": torch.IntTensor(data[:, 0, :]),
@@ -150,9 +175,9 @@ class FlattenEHRDataset(BaseEHRDataset):
         data = np.memmap(
             self.data_path,
             dtype=np.int16,
-            shape=(3, self.args.max_seq_len),
+            shape=(3, self.args.max_patient_token_len),
             mode="r",
-            offset=row.index * 3 * 2 * self.args.max_seq_len,
+            offset=row['fl_index'] * 3 * 2 * self.args.max_patient_token_len,
         )
         return {
             "input_ids": torch.IntTensor(data[0, :]),

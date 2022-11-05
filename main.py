@@ -117,6 +117,16 @@ def get_parser():
         help='num buckets to bin time intervals by'
     )
 
+    parser.add_argument(
+        '--max_event_token_len', type=int, default=128,
+        help='max token length for each event (Hierarchical)'
+    )
+
+    parser.add_argument(
+        '--max_patient_token_len', type=int, default=8192,
+        help='max token length for each patient (Flatten)'
+    )
+
     return parser
 
 

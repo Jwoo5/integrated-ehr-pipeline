@@ -1,10 +1,8 @@
 import os
-import glob
 import logging
-
 import pandas as pd
 import numpy as np
-
+import glob
 from ehrs import register_ehr, EHR
 
 logger = logging.getLogger(__name__)
@@ -57,14 +55,14 @@ class MIMICIV(EHR):
         if self.ext is None:
             self.ext = self.infer_data_extension()
 
-        self._icustay_fname = "icustays" + self.ext
-        self._patient_fname = "patients" + self.ext
-        self._admission_fname = "admissions" + self.ext
-        self._diagnosis_fname = "diagnoses_icd" + self.ext
+        self._icustay_fname = "icu/icustays" + self.ext
+        self._patient_fname = "hosp/patients" + self.ext
+        self._admission_fname = "hosp/admissions" + self.ext
+        self._diagnosis_fname = "hosp/diagnoses_icd" + self.ext
 
         self.features = [
             {
-                "fname": "labevents" + self.ext,
+                "fname": "hosp/labevents" + self.ext,
                 "timestamp": "charttime",
                 "timeoffsetunit": "abs",
                 "exclude": [
@@ -74,11 +72,11 @@ class MIMICIV(EHR):
                     "specimen_id"
                 ],
                 "code": ["itemid"],
-                "desc": ["d_labitems" + self.ext],
+                "desc": ["hosp/d_labitems" + self.ext],
                 "desc_key": ["label"],
             },
             {
-                "fname": "prescriptions" + self.ext,
+                "fname": "hosp/prescriptions" + self.ext,
                 "timestamp": "starttime",
                 "timeoffsetunit": "abs",
                 "exclude": [
@@ -93,7 +91,7 @@ class MIMICIV(EHR):
                 ],
             },
             {
-                "fname": "inputevents" + self.ext,
+                "fname": "icu/inputevents" + self.ext,
                 "timestamp": "starttime",
                 "timeoffsetunit": "abs",
                 "exclude": [
@@ -106,7 +104,7 @@ class MIMICIV(EHR):
                     "statusdescription",
                 ],
                 "code": ["itemid"],
-                "desc": ["d_items" + self.ext],
+                "desc": ["hosp/d_items" + self.ext],
                 "desc_key": ["label"],
             },
         ]
@@ -271,3 +269,25 @@ class MIMICIV(EHR):
             lambda x: icd_convert(x["icd_version"], x["icd_code"]), axis=1
         )
         return dx
+    
+    
+    def infer_data_extension(self) -> str:
+        if (
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv.gz"))) == 21
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv.gz"))) == 8
+        ):
+            ext = ".csv.gz"
+        elif (
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv")))==21
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv")))==8
+        ):
+            ext = ".csv"
+        else:
+            raise AssertionError(
+                "Provided data directory is not correct. Please check if --data is correct. "
+                "--data: {}".format(self.data_dir)
+            )
+
+        logger.info("Data extension is set to '{}'".format(ext))
+
+        return ext
