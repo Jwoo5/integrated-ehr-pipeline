@@ -104,7 +104,7 @@ class MIMICIV(EHR):
                     "statusdescription",
                 ],
                 "code": ["itemid"],
-                "desc": ["hosp/d_items" + self.ext],
+                "desc": ["icu/d_items" + self.ext],
                 "desc_key": ["label"],
             },
         ]
