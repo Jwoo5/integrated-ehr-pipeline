@@ -1,6 +1,10 @@
 # Integrated-EHR-Pipeline
 - Pre-processing code refining project in [UniHPF](https://arxiv.org/abs/2207.09858)
 
+## Install Requirements
+```
+pip install numpy pandas sortedcontainers tqdm treelib transformers
+```
 ## How to Use
 ```
 main.py --ehr {eicu, mimiciii, mimiciv}

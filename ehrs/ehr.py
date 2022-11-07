@@ -13,6 +13,7 @@ import datetime
 import pandas as pd
 import numpy as np
 
+from transformers import AutoTokenizer
 from sortedcontainers import SortedList
 from tqdm import tqdm
 
@@ -157,20 +158,13 @@ class EHR(object):
         # since it requires to observe each next icustays,
         # which would have been excluded in the final cohorts
         icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
+        icustays["readmission"] = 1
+        icustays.loc[
+            icustays.groupby(self.hadm_key)["INTIME"].idxmax(),
+            "readmission"
+        ] = 0
         if self.first_icu:
-            is_readmitted = (
-                icustays.groupby(self.hadm_key)[self.icustay_key].count() > 1
-            ).astype(int)
-            is_readmitted = is_readmitted.to_frame().rename(columns={self.icustay_key: "readmission"})
-
-            icustays = icustays.groupby(self.hadm_key).first().reset_index()
-            icustays = icustays.join(is_readmitted, on=self.hadm_key)
-        else:
-            icustays["readmission"] = 1
-            icustays.loc[
-                icustays.groupby(self.hadm_key)["INTIME"].idxmax(),
-                "readmission"
-            ] = 0
+            df = df.groupby(self.hadm_key).first().reset_index()
 
         cohorts = icustays
 
@@ -568,8 +562,6 @@ class EHR(object):
             k: map(_quantize, v) for k, v in time_intervals.items()
         }
 
-        from transformers import AutoTokenizer
-
         tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT", use_fast=True)
         tokenizer.add_special_tokens({
             "additional_special_tokens": list(self.special_tokens_dict.values())
@@ -705,9 +697,9 @@ class EHR(object):
             # NOTE: [CLS] and [SEP] only added at first/end of flatten input, but [TIME] inserted between events
             flatten_lens = np.cumsum([len(i)+len(j)+1 for i,j in zip(table_names_tokenized, events_tokenized)])
             event_length = len(table_names_tokenized)
-            if flatten_lens[-1] >8190:
+            if flatten_lens[-1] >self.max_patient_token_len-2:
                 # Should remove events
-                event_length = np.argmin(flatten_lens<=8190)
+                event_length = np.argmin(flatten_lens<=self.max_patient_token_len-2)
 
             cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_start'] = hierarchical_data_index
             cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_end'] = hierarchical_data_index + event_length
