@@ -89,7 +89,7 @@ class eICU(EHR):
                 "fname": "nurseCharting" + self.ext,
                 "timestamp": "nursingchartoffset",
                 "timeoffsetunit": "min",
-                "exclude": ["nursingchartentryoffset", "nursingchatid"],
+                "exclude": ["nursingchartentryoffset", "nursingchartid"],
             },
                 {
                 "fname": "nurseCare" + self.ext,

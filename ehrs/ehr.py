@@ -162,7 +162,7 @@ class EHR(object):
             "readmission"
         ] = 0
         if self.first_icu:
-            df = df.groupby(self.hadm_key).first().reset_index()
+            icustays = icustays.groupby(self.hadm_key).first().reset_index()
 
         cohorts = icustays
 
@@ -443,7 +443,7 @@ class EHR(object):
                         if not (0 <= charttime and charttime <= outtime - gap_size * 60):
                             continue
                     else:
-                        if not (0 <= charttime and charttime <= intime + obs_size * 60):
+                        if not (0 <= charttime and charttime <= obs_size * 60):
                             continue
 
                     # Rearrange Charttime to be relative to outtime (for rolling_from_last)
@@ -708,6 +708,7 @@ class EHR(object):
 
             # NOTE: [CLS] and [SEP] only added at first/end of flatten input, but [TIME] inserted between events
             # Should Cut From First!!
+            flatten_cut_idx = -1
             flatten_lens = np.cumsum([len(i)+len(j)+1 for i,j in zip(table_names_tokenized, events_tokenized)])
             event_length = len(table_names_tokenized)
             if flatten_lens[-1] >self.max_patient_token_len-2:
