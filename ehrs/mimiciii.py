@@ -109,6 +109,7 @@ class MIMICIII(EHR):
         ]
         self._icustay_key = "ICUSTAY_ID"
         self._hadm_key = "HADM_ID"
+        self._patient_key = "SUBJECT_ID"
 
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
@@ -182,7 +183,7 @@ class MIMICIII(EHR):
         patients = patients[
             patients["SUBJECT_ID"].isin(icustays["SUBJECT_ID"])
         ]
-        patients = patients.drop(columns=["ROW_ID"])[["SUBJECT_ID", "DOB"]]
+        patients = patients.drop(columns=["ROW_ID"])[["DOB", "SUBJECT_ID"]]
         icustays = icustays.merge(patients, on="SUBJECT_ID", how="left")
 
         def calculate_age(birth: datetime, now: datetime):

@@ -128,7 +128,7 @@ class eICU(EHR):
                 "exclude": ["treatmentid", "activeupondischarge"],
             },
             {
-                "fname": "vitalAPeriodic" + self.ext,
+                "fname": "vitalAperiodic" + self.ext,
                 "timestamp": "observationoffset",
                 "timeoffsetunit": "min",
                 "exclude": ["vitalaperiodicid"],
@@ -143,6 +143,7 @@ class eICU(EHR):
 
         self._icustay_key = "patientunitstayid"
         self._hadm_key = "patienthealthsystemstayid"
+        self._patient_key = "uniquepid"
 
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))

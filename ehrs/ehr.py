@@ -2,7 +2,6 @@ import sys
 import os
 import re
 import shutil
-import glob
 import subprocess
 import logging
 
@@ -123,6 +122,10 @@ class EHR(object):
     @property
     def hadm_key(self):
         return self._hadm_key
+    
+    @property
+    def patient_key(self):
+        return self._patient_key
 
     @property
     def num_special_tokens(self):
@@ -319,8 +322,8 @@ class EHR(object):
 
     def prepare_events(self, cohorts, cached=False):
         if cached:
-            cohorts = self.load_from_cache(self.ehr_name + ".events.cohorts")
-            cohort_events = self.load_from_cache(self.ehr_name + ".events.data")
+            cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dropped")
+            cohort_events = self.load_from_cache(self.ehr_name + ".events")
             if (cohorts is not None) and (cohort_events is not None):
                 return cohorts, cohort_events
             else:
@@ -343,7 +346,6 @@ class EHR(object):
         cohorts.drop(columns=["INTIME"], inplace=True)
 
         cohort_events = {id: SortedList() for id in cohorts[self.icustay_key].to_list()}
-        patterns_for_numeric = re.compile(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)")
 
         for table in self.tables:
             fname = table["fname"]
@@ -407,14 +409,13 @@ class EHR(object):
                         for icustay_id in hadm_key_icustays:
                             intime = icustay_to_intime[icustay_id]
                             outtime = icustay_to_outtime[icustay_id]
-                            # Should not work
                             if table['timeoffsetunit'] == 'abs':
                                 charttime = (event[timestamp_key] - intime).total_seconds() // 60
                                 if charttime >=0 and charttime <= outtime:
                                     event[self.icustay_key] = icustay_id
                                     break
                             else:
-                                # No icustay_id missing case for eICU
+                                # All tables in eICU has icustay_key -> no need to handle
                                 raise NotImplementedError()
 
                         # which means that the event has no corresponding icustay
@@ -428,7 +429,6 @@ class EHR(object):
                     # Type timedelta
                     if table['timeoffsetunit'] =='abs':
                         charttime = (event[timestamp_key] - intime).total_seconds() // 60
-                        outtime = outtime
 
                     # Type int, relative minute from intime
                     # Outtime is also relative offset from intime
@@ -466,9 +466,10 @@ class EHR(object):
                                 and col in code_to_descriptions
                             ):
                                 val = code_to_descriptions[col][val]
-
-                            val = re.sub(patterns_for_numeric, lambda x: str(round(float(x.group(0)), 4)) if x.group(0) != '.'*len(x.group(0)) else x.group(0), str(val))
-                            col = re.sub(patterns_for_numeric, lambda x: str(round(float(x.group(0)), 4)) if x.group(0) !='.'*len(x.group(0)) else x.group(0), str(col))
+                            if re.search(r"\d+\.\d+\.\d+", str(val)) or re.search(r"\d+\.\d+\.\d+", str(col)):
+                                logger.warn("val: {} col:{} has the irregular numeric format".format(val, col))
+                            val = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(val))
+                            col = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(col))
 
                             cols.append(col)
                             vals.append(val)
@@ -495,10 +496,10 @@ class EHR(object):
         )
 
         self.save_to_cache(
-            cohorts, self.ehr_name + ".events.cohorts", use_pickle=True
+            cohorts, self.ehr_name + ".cohorts.labeled.dropped", use_pickle=True
         )
         self.save_to_cache(
-            cohort_events, self.ehr_name + ".events.data", use_pickle=True
+            cohort_events, self.ehr_name + ".events", use_pickle=True
         )
 
         return cohorts, cohort_events
@@ -556,6 +557,9 @@ class EHR(object):
         bins = np.arange(self.bins + 1)
         bins = bins / bins[-1]
         bins = np.quantile(time_intervals_flattened, bins)
+        with open(os.path.join(self.dest, self.ehr_name + "_time_gap_bins.tsv"), "w") as f:
+            for i, quantile in enumerate(bins):
+                print("{}\t{}".format(i, quantile), file=f)
         logger.info("Time buckets: {}".format(bins))
         
         self.add_special_tokens(
@@ -582,8 +586,8 @@ class EHR(object):
         tokenizer.add_special_tokens({
             "additional_special_tokens": list(self.special_tokens_dict.values())
         })
-        cls_token_id = tokenizer.encode("[CLS]")[1]
-        sep_token_id = tokenizer.encode("[SEP]")[1]
+        cls_token_id = tokenizer.cls_token_id
+        sep_token_id = tokenizer.sep_token_id
 
         encoded_events = {
             k: [
@@ -707,7 +711,7 @@ class EHR(object):
             # token_type_embeddings[ocustay]: corresponding token type ids
 
             # NOTE: [CLS] and [SEP] only added at first/end of flatten input, but [TIME] inserted between events
-            # Should Cut From First!!
+            # Should retain recent events!
             flatten_cut_idx = -1
             flatten_lens = np.cumsum([len(i)+len(j)+1 for i,j in zip(table_names_tokenized, events_tokenized)])
             event_length = len(table_names_tokenized)
@@ -809,14 +813,18 @@ class EHR(object):
             hierarchical_data.flush()
             flatten_data.flush()
             
-        cohorts.dropna(subset=['hi_starts'], inplace=True)
+        cohorts.dropna(subset=['hi_start'], inplace=True)
         # Should consider hadm_id for split
-        shuffled = cohorts.groupby(self.hadm_key)[self.hadm_key].count().sample(frac=1, random_state=self.seed)
+        shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=self.seed)
         cum_len = shuffled.cumsum()
 
-        cohorts.loc[cohorts[self.hadm_key].isin(shuffled[cum_len < int(len(shuffled)*0.8)].index), 'split'] = 'train'
-        cohorts.loc[cohorts[self.hadm_key].isin(shuffled[(cum_len >= int(len(shuffled)*0.8)) & (cum_len < int(len(shuffled)*0.9))].index), 'split'] = 'valid'
-        cohorts.loc[cohorts[self.hadm_key].isin(shuffled[cum_len >= int(len(shuffled)*0.9)].index), 'split'] = 'test'
+        cohorts.loc[cohorts[self.patient_key].isin(
+            shuffled[cum_len < int(len(shuffled)*self.valid_percent)].index), 'split'] = 'test'
+        cohorts.loc[cohorts[self.patient_key].isin(
+            shuffled[(cum_len >= int(len(shuffled)*self.valid_percent)) 
+            & (cum_len < int(len(shuffled)*2*self.valid_percent))].index), 'split'] = 'valid'
+        cohorts.loc[cohorts[self.patient_key].isin(
+            shuffled[cum_len >= int(len(shuffled)*2*self.valid_percent)].index), 'split'] = 'train'
 
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'))
 
@@ -871,6 +879,7 @@ class EHR(object):
         checklist = [
             self.hadm_key,
             self.icustay_key,
+            self.patient_key,
             "LOS",
             "AGE",
             "INTIME",
@@ -927,12 +936,6 @@ class EHR(object):
                 "if you log in with a credentialed user"
             )
 
-        fnames = glob.glob(os.path.join(dest, output_dir, "**/*.csv.gz"), recursive=True)
-        for fname in fnames:
-            os.rename(fname, os.path.join(dest, os.path.basename(fname)))
-
-        shutil.rmtree(os.path.join(dest, output_dir.split("/")[0]))
-
     def download_ccs_from_url(self, dest) -> None:
         subprocess.run(
             [
@@ -964,14 +967,14 @@ class EHR(object):
             ]
         )
 
-    """
-    input:
-        row: List[str], columns or values of an event
-    output:
-        splitteds: List[str]
-        number_groups_list: List[List[int]]
-    """
     def split_and_get_number_groups(self, row):
+        """
+        input:
+            row: List[str], columns or values of an event
+        output:
+            splitteds: List[str]
+            number_groups_list: List[List[int]]
+        """
         splitted_list = []
         number_groups_list = []
 
@@ -986,21 +989,20 @@ class EHR(object):
 
         return splitted_list, number_groups_list
 
-    """
-    input:
-        data_tokenized: List[List[List[int]]]
-        data_number_groups_list: List[List[List[int]]]
-    output:
-        dpe: List[List[List[int]]]
-    cf. numerical values are already rounded into 4 digits
-    Not Digit/Padding -> 0
-    if original string is '1111.1111 aaa'-> '987654321 000'
-    
-    """
+
     # Case 1. '2 5', '25'
     # Case 2. Too long number
     def get_dpe(self, data_tokenized, data_number_groups_list) -> list:
-
+        """
+        input:
+            data_tokenized: List[List[List[int]]]
+            data_number_groups_list: List[List[List[int]]]
+        output:
+            dpe: List[List[List[int]]]
+        cf. numerical values are already rounded into 4 digits
+        Not Digit/Padding -> 0
+        if original string is '1111.1111 aaa'-> '987654321 000'
+        """
         number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]  # [0-9\.]
         dpes = []
         for event_id, number_groups_list in zip(
@@ -1023,15 +1025,15 @@ class EHR(object):
 
                     # Case Integer
                     if len(digits) == 0:
-                        data_dpe[start:end] = list(range(len(group) + 5, 5, -1))
+                        data_dpe[start:end] = list(range(len(group[0]) + 5, 5, -1))
                     # Case Float
-                    if len(digits) == 1:
+                    elif len(digits) == 1:
                         digit_idx = len(group[0]) - digits[0]
                         data_dpe[start:end] = list(
                             range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
                         )
                     else:
-                        breakpoint()
+                        logger.warn(f"{data_dpe[start:end]} has irregular numerical formats")
 
                     numbers_cnt += len(group[0])
                 event_dpes.append(data_dpe)

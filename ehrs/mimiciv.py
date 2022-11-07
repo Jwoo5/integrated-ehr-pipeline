@@ -169,6 +169,7 @@ class MIMICIV(EHR):
 
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
+        self._patient_key = "subject_id"
 
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
