@@ -14,10 +14,6 @@ class MIMICIII(EHR):
     def __init__(self, cfg):
         super().__init__(cfg)
 
-        self.obs_size = pd.Timedelta(self.obs_size, unit="h")
-        self.gap_size = pd.Timedelta(self.gap_size, unit="h")
-        self.pred_size = pd.Timedelta(self.pred_size, unit="h")
-
         self.ehr_name = "mimiciii"
 
         if self.data_dir is None:
@@ -55,7 +51,7 @@ class MIMICIII(EHR):
         self._diagnosis_fname = "DIAGNOSES_ICD" + self.ext
 
         # XXX more features? user choice?
-        self.features = [
+        self.tables = [
             {
                 "fname": "LABEVENTS" + self.ext,
                 "timestamp": "CHARTTIME",
@@ -231,6 +227,8 @@ class MIMICIII(EHR):
             ~is_discharged_in_icu, "HOS_DISCHARGE_LOCATION"
         ] = icustays.loc[~is_discharged_in_icu, "DISCHARGE_LOCATION"]
 
+        icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
+        icustays["OUTTIME"] = (icustays["OUTTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
         return icustays
 
 

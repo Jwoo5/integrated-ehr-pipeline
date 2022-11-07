@@ -12,10 +12,6 @@ class MIMICIV(EHR):
     def __init__(self, cfg):
         super().__init__(cfg)
 
-        self.obs_size = pd.Timedelta(self.obs_size, unit="h")
-        self.gap_size = pd.Timedelta(self.gap_size, unit="h")
-        self.pred_size = pd.Timedelta(self.pred_size, unit="h")
-
         self.ehr_name = "mimiciv"
 
         if self.data_dir is None:
@@ -60,7 +56,7 @@ class MIMICIV(EHR):
         self._admission_fname = "hosp/admissions" + self.ext
         self._diagnosis_fname = "hosp/diagnoses_icd" + self.ext
 
-        self.features = [
+        self.tables = [
             {
                 "fname": "hosp/labevents" + self.ext,
                 "timestamp": "charttime",
@@ -109,6 +105,68 @@ class MIMICIV(EHR):
             },
         ]
 
+        if cfg.use_more_tables:
+            self.tables+=[
+                {
+                    "fname": "icu/chartevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": [
+                        "storetime",
+                        "subject_id",
+                    ],
+                    "code": ["itemid"],
+                    "desc": ["icu/d_items" + self.ext],
+                    "desc_key": ["label"],
+                },
+                {
+                    "fname": "icu/outputevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": [
+                        "storetime",
+                        "subject_id",
+                    ],
+                    "code": ["itemid"],
+                    "desc": ["icu/d_items" + self.ext],
+                    "desc_key": ["label"],
+                },
+                {
+                    "fname": "hosp/microbiologyevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": [
+                        "chartdate",
+                        "storetime",
+                        "storedate"
+                        "subject_id",
+                        "microevent_id",
+                        "micro_specimen_id",
+                        "spec_itemid",
+                        "test_itemid",
+                        "org_itemid",
+                        "ab_itemid"
+                    ],
+                },
+                {
+                    "fname": "icu/procedureevents" + self.ext,
+                    "timestamp": "starttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": [
+                        "storetime",
+                        "endtime"
+                        "subject_id",
+                        "orderid",
+                        "linkorderid",
+                        "continueinnextdept",
+                        "statusdescription"
+                    ],
+                    "code": ["itemid"],
+                    "desc": ["icu/d_items" + self.ext],
+                    "desc_key": ["label"],
+                },
+            ]
+
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
 
@@ -123,7 +181,7 @@ class MIMICIV(EHR):
         return cohorts
 
     def prepare_tasks(self, cohorts, cached=False):
-        if cohorts is None and cached:
+        if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 self.labeled_cohorts = labeled_cohorts
@@ -229,6 +287,9 @@ class MIMICIV(EHR):
         icustays.loc[
             ~is_discharged_in_icu, "HOS_DISCHARGE_LOCATION"
         ] = icustays.loc[~is_discharged_in_icu, "discharge_location"]
+
+        icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
+        icustays["OUTTIME"] = (icustays["OUTTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
 
         return icustays
 

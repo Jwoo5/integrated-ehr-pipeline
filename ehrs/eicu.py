@@ -56,7 +56,7 @@ class eICU(EHR):
         self._icustay_fname = "patient" + self.ext
         self._diagnosis_fname = "diagnosis" + self.ext
 
-        self.features = [
+        self.tables = [
             {
                 "fname": "lab" + self.ext,
                 "timestamp": "labresultoffset",
@@ -81,6 +81,63 @@ class eICU(EHR):
                 "timestamp": "infusionoffset",
                 "timeoffsetunit": "min",
                 "exclude": ["infusiondrugid"],
+            },
+        ]
+        if cfg.use_more_tables:
+            self.tables += [
+            {
+                "fname": "nurseCharting" + self.ext,
+                "timestamp": "nursingchartoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["nursingchartentryoffset", "nursingchatid"],
+            },
+                {
+                "fname": "nurseCare" + self.ext,
+                "timestamp": "nursecareoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["nursecareentryoffset", "nursecareid"],
+            },
+            {
+                "fname": "intakeOutput" + self.ext,
+                "timestamp": "intakeoutputoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["intakeoutputentryoffset", "intakeoutputid"],
+            },
+            {
+                "fname": "customLab" + self.ext,
+                "timestamp": "labotheroffset",
+                "timeoffsetunit": "min",
+                "exclude": ["customlabid"],
+            },
+            {
+                "fname": "microLab" + self.ext,
+                "timestamp": "culturetakenoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["microlabid"],
+            },
+            {
+                "fname": "nurseAssessment" + self.ext,
+                "timestamp": "nurseassessoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["nurseassessentryoffset", "nurseassessid"],
+            },
+            {
+                "fname": "treatment" + self.ext,
+                "timestamp": "treatmentoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["treatmentid", "activeupondischarge"],
+            },
+            {
+                "fname": "vitalAPeriodic" + self.ext,
+                "timestamp": "observationoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["vitalaperiodicid"],
+            },
+            {
+                "fname": "vitalPeriodic" + self.ext,
+                "timestamp": "observationoffset",
+                "timeoffsetunit": "min",
+                "exclude": ["vitalperiodicid"],
             },
         ]
 

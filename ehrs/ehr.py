@@ -1,6 +1,5 @@
 import sys
 import os
-import random
 import re
 import shutil
 import glob
@@ -9,7 +8,6 @@ import logging
 
 from typing import Union, List
 
-import datetime
 import pandas as pd
 import numpy as np
 
@@ -99,6 +97,9 @@ class EHR(object):
         self._icustay_key = None
         self._hadm_key = None
 
+        self.rolling_from_last = cfg.rolling_from_last
+        assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
+
     @property
     def icustay_fname(self):
         return self._icustay_fname
@@ -145,9 +146,6 @@ class EHR(object):
 
         obs_size = self.obs_size
         gap_size = self.gap_size
-        if isinstance(obs_size, datetime.timedelta):
-            obs_size = obs_size.total_seconds() / 3600
-            gap_size = gap_size.total_seconds() / 3600
 
         icustays = icustays[icustays["LOS"] >= (obs_size + gap_size) / 24]
         icustays = icustays[
@@ -202,29 +200,37 @@ class EHR(object):
         ]].copy()
 
         # los prediction
-        labeled_cohorts["los_3day"] = (cohorts["LOS"] > 3).astype(int)
-        labeled_cohorts["los_7day"] = (cohorts["LOS"] > 7).astype(int)
+        if not self.rolling_from_last:
+            labeled_cohorts["los_3day"] = (cohorts["LOS"] > 3).astype(int)
+            labeled_cohorts["los_7day"] = (cohorts["LOS"] > 7).astype(int)
 
         # mortality prediction
         # if the discharge location of an icustay is 'Death'
         #   & intime + obs_size + gap_size <= dischtime <= intime + obs_size + pred_size
         # it is assigned positive label on the mortality prediction
-        labeled_cohorts["mortality"] = (
-            (
+        if self.rolling_from_last:
+            labeled_cohorts["mortality"] = (
+                (
                 (labeled_cohorts["ICU_DISCHARGE_LOCATION"] == "Death")
                 | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-            )
-            & (
-                (
-                    labeled_cohorts["INTIME"] + self.obs_size + self.gap_size
-                    < labeled_cohorts["DISCHTIME"]
                 )
                 & (
-                    labeled_cohorts["DISCHTIME"]
-                    <= labeled_cohorts["INTIME"] + self.obs_size + self.pred_size
+                    labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60 - self.gap_size * 60
                 )
-            )
-        ).astype(int)
+            ).astype(int)
+        else:
+            labeled_cohorts["mortality"] = (
+                (
+                    (labeled_cohorts["ICU_DISCHARGE_LOCATION"] == "Death")
+                    | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+                )
+                & (
+                    self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+                )
+                & (
+                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60
+                )
+            ).astype(int)
         # if the discharge of 'Death' occurs in icu or hospital
         # we retain these cases for the imminent discharge task
         labeled_cohorts["in_icu_mortality"] = (
@@ -257,16 +263,18 @@ class EHR(object):
 
 
         # define imminent discharge prediction task
-        is_discharged = (
-            (
-                labeled_cohorts["INTIME"] + self.obs_size + self.gap_size
-                <= labeled_cohorts["DISCHTIME"]
+        if self.rolling_from_last:
+            is_discharged = (
+                labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60 - self.gap_size * 60
             )
-            & (
-                labeled_cohorts["DISCHTIME"]
-                <= labeled_cohorts["INTIME"] + self.obs_size + self.pred_size
+        else:
+            is_discharged = (
+                (
+                    self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
+                )
+                & (
+                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
             )
-        )
         labeled_cohorts.loc[is_discharged, "imminent_discharge"] = labeled_cohorts.loc[
             is_discharged, "HOS_DISCHARGE_LOCATION"
         ]
@@ -295,7 +303,6 @@ class EHR(object):
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
             columns=[
-                "OUTTIME",
                 "in_icu_mortality",
                 "in_hospital_mortality",
                 "DISCHTIME",
@@ -329,34 +336,34 @@ class EHR(object):
         icustay_to_intime = dict(
             zip(cohorts[self.icustay_key], cohorts["INTIME"])
         )
+        icustay_to_outtime = dict(
+            zip(cohorts[self.icustay_key], cohorts["OUTTIME"])
+        )
 
         cohorts.drop(columns=["INTIME"], inplace=True)
 
         cohort_events = {id: SortedList() for id in cohorts[self.icustay_key].to_list()}
         patterns_for_numeric = re.compile(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)")
 
-        for feat in self.features:
-            fname = feat["fname"]
-            timestamp_key = feat["timestamp"]
-            excludes = feat["exclude"]
-            hour_to_offset_unit = None
+        for table in self.tables:
+            fname = table["fname"]
+            timestamp_key = table["timestamp"]
+            excludes = table["exclude"]
             obs_size = self.obs_size
-            if feat["timeoffsetunit"] == "min":
-                hour_to_offset_unit = 60
-                obs_size *= 60
+            gap_size = self.gap_size
 
             logger.info("{} in progress.".format(fname))
 
             code_to_descriptions = None
-            if "code" in feat:
+            if "code" in table:
                 code_to_descriptions = {
                     k: pd.read_csv(os.path.join(self.data_dir, v))
-                    for k, v in zip(feat["code"], feat["desc"])
+                    for k, v in zip(table["code"], table["desc"])
                 }
                 code_to_descriptions = {
                     k: dict(zip(v[k], v[d_k]))
                     for (k, v), d_k in zip(
-                        code_to_descriptions.items(), feat["desc_key"]
+                        code_to_descriptions.items(), table["desc_key"]
                     )
                 }
 
@@ -386,26 +393,12 @@ class EHR(object):
                 if len(events) == 0:
                     continue
 
-                if events[timestamp_key].dtype != int:
+                if table["timeoffsetunit"] == 'abs':
                     events[timestamp_key] = pd.to_datetime(
                         events[timestamp_key], infer_datetime_format=True
                     )
-                dummy_for_sanity_check = events[timestamp_key].iloc[0]
-                if (
-                    isinstance(dummy_for_sanity_check, datetime.datetime)
-                    and isinstance(self.obs_size, datetime.timedelta)
-                ) or (
-                    isinstance(dummy_for_sanity_check, (int, np.integer))
-                    and isinstance(self.obs_size, (int, np.integer))
-                ):
-                    pass
-                else:
-                    raise AssertionError(
-                        (type(dummy_for_sanity_check), type(self.obs_size))
-                    )
 
                 for _, event in events.iterrows():
-                    charttime = event[timestamp_key]
                     if infer_icustay_from_hadm_key:
                         # infer icustay id for the event based on `self.hadm_key`
                         hadm_key_icustays = icustays_by_hadm_key[
@@ -413,24 +406,49 @@ class EHR(object):
                         ]
                         for icustay_id in hadm_key_icustays:
                             intime = icustay_to_intime[icustay_id]
-                            if hour_to_offset_unit is not None:
-                                intime *= hour_to_offset_unit
-    
-                            if intime <= charttime and charttime <= intime + obs_size:
-                                event[self.icustay_key] = icustay_id
-                                break
+                            outtime = icustay_to_outtime[icustay_id]
+                            # Should not work
+                            if table['timeoffsetunit'] == 'abs':
+                                charttime = (event[timestamp_key] - intime).total_seconds() // 60
+                                if charttime >=0 and charttime <= outtime:
+                                    event[self.icustay_key] = icustay_id
+                                    break
+                            else:
+                                # No icustay_id missing case for eICU
+                                raise NotImplementedError()
 
                         # which means that the event has no corresponding icustay
                         if self.icustay_key not in event:
                             continue
                     else:
                         intime = icustay_to_intime[event[self.icustay_key]]
-                        if hour_to_offset_unit is not None:
-                            intime *= hour_to_offset_unit
-                        # which means that the event has been charted before / after the icustay
-                        if not (intime <= charttime and charttime <= intime + obs_size):
+                        outtime = icustay_to_outtime[event[self.icustay_key]]
+
+                    # Convert time compatible to relative minutes from intime
+                    # Type timedelta
+                    if table['timeoffsetunit'] =='abs':
+                        charttime = (event[timestamp_key] - intime).total_seconds() // 60
+                        outtime = outtime
+
+                    # Type int, relative minute from intime
+                    # Outtime is also relative offset from intime
+                    elif table['timeoffsetunit'] =='min':
+                        charttime = event[timestamp_key]
+                    
+                    else:
+                        raise NotImplementedError()
+                    
+                    # which means that the event has been charted before / after the icustay
+                    if self.rolling_from_last:
+                        if not (0 <= charttime and charttime <= outtime - gap_size * 60):
                             continue
-                        
+                    else:
+                        if not (0 <= charttime and charttime <= intime + obs_size * 60):
+                            continue
+
+                    # Rearrange Charttime to be relative to outtime (for rolling_from_last)
+                    charttime = charttime - outtime + gap_size * 60
+
                     icustay_id = event[self.icustay_key]
                     if icustay_id in cohort_events:
                         event = event.drop(
@@ -506,14 +524,11 @@ class EHR(object):
             shape=(len(cohorts),3, self.max_patient_token_len)
         )
 
-        # Reset cohort index for flatten data indexing
-        cohorts.reset_index(drop=True, inplace=True)
-        cohorts.reset_index(inplace=True, names='fl_index')
         hierarchical_data_index = 0
-
+        flatten_data_index = 0
         # XXX special tokens for the time interval (zero, last)
-        zero_time_interval = pd.Timedelta(0)
-        last_time_interval = pd.Timedelta(-1)
+        zero_time_interval = 0
+        last_time_interval = -1
 
         collated_timestamps = {
             icustay_id: [event[0] for event in events]
@@ -541,7 +556,8 @@ class EHR(object):
         bins = np.arange(self.bins + 1)
         bins = bins / bins[-1]
         bins = np.quantile(time_intervals_flattened, bins)
-
+        logger.info("Time buckets: {}".format(bins))
+        
         self.add_special_tokens(
             ["[TIME_INT_ZERO]", "[TIME_INT_LAST]"]
             + ["[TIME_INT_{}]".format(i) for i in range(1, len(bins))]
@@ -577,10 +593,9 @@ class EHR(object):
             for k, v in cohort_events.items()
         }
 
-        del collated_timestamps
         del time_intervals_flattened
         del time_intervals
-
+        cohorts[['hi_start', 'flatten_start']]=None
         """
         1) we can batch_encode list of table_names / list of event_strings / list of time_intervals
         2) recover events: list of [tokenized(table_name), tokenized(event_string), [TIME_INT_{}]]
@@ -597,11 +612,8 @@ class EHR(object):
             4-4) num_events -= i, flattened = flattened[-(flattened_size - index):], hier = hier[-(num_events):]
         5) prepend [CLS], append [SEP] for each hierarchical event, for each flattened event
         """
-
-        rand = random.Random(self.seed)
-
-        for icustay_idx, items in enumerate(encoded_events.items()):
-            icustay_id, events_per_icustay = items
+        for icustay_id, events_per_icustay in tqdm(encoded_events.items()):
+            times = collated_timestamps[icustay_id]
             # make list of table names
             table_names = [x[0] for x in events_per_icustay]
             # tokenize table names
@@ -695,16 +707,39 @@ class EHR(object):
             # token_type_embeddings[ocustay]: corresponding token type ids
 
             # NOTE: [CLS] and [SEP] only added at first/end of flatten input, but [TIME] inserted between events
+            # Should Cut From First!!
             flatten_lens = np.cumsum([len(i)+len(j)+1 for i,j in zip(table_names_tokenized, events_tokenized)])
             event_length = len(table_names_tokenized)
             if flatten_lens[-1] >self.max_patient_token_len-2:
-                # Should remove events
-                event_length = np.argmin(flatten_lens<=self.max_patient_token_len-2)
+                flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+2)
+                flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[flatten_cut_idx+1:]
+                event_length = len(flatten_lens)
+                times = times[-event_length:]
 
-            cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_start'] = hierarchical_data_index
-            cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_end'] = hierarchical_data_index + event_length
-            assert cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'fl_index'].values[0]==icustay_idx
+            if self.rolling_from_last:
+                # For icu len:
+                # Iteratively add hi_start and hi_end and time_len
+                # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
+                # Remove last n hours
+                max_obs_len = int(-((times[0] // (self.obs_size * 60)) * self.obs_size* 60))
+                starts = []
+                for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
+                    if np.searchsorted(times, -obs_len + self.obs_size * 60) -np.searchsorted(times, -obs_len) <= self.min_event_size:
+                        starts = []
+                        break
+                    starts.append(np.searchsorted(times, -obs_len))
+                if starts == []:
+                    continue
+                # To allocate list to cell
+                cohort_idx = cohorts.index[cohorts[self.icustay_key]==icustay_id][0]
+                cohorts.at[cohort_idx, 'hi_start'] = [i + hierarchical_data_index for i in starts]
+                cohorts.at[cohort_idx, 'flatten_start'] = [flatten_lens[i]+1 for i in starts]
+            else:
+                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_start'] = hierarchical_data_index
+                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'flatten_start'] = 0
 
+            cohorts.loc[cohorts[self.icustay_key]== icustay_id, 'hi_end'] = hierarchical_data_index + event_length
+            cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'flatten_idx'] = flatten_data_index
             hi_input = [
                 [cls_token_id] + table_name + event + time_interval + [sep_token_id]
                 for event_idx, table_name, event, time_interval in zip(
@@ -712,26 +747,26 @@ class EHR(object):
                     table_names_tokenized,
                     events_tokenized,
                     time_intervals_tokenized,
-                ) if event_idx < event_length
+                ) if event_idx > flatten_cut_idx
             ]
             hi_type = [
                 [self.cls_type_id] + table_type_token + col_val_type_token + timeint_type_token + [self.sep_type_id]
                 for event_idx, table_type_token, col_val_type_token, timeint_type_token in zip(
                     range(len(table_names_tokenized)), table_type_tokens, col_val_type_tokens, timeint_type_tokens
-                ) if event_idx < event_length
+                ) if event_idx > flatten_cut_idx
             ]
             hi_dpe = [
                 [self.others_dpe_id] + table_dpe_token + col_val_dpe_token + timeint_dpe_token + [self.others_dpe_id]
                 for event_idx, table_dpe_token, col_val_dpe_token, timeint_dpe_token in zip(
                     range(len(table_names_tokenized)), table_dpe_tokens, col_val_dpe_tokens, timeint_dpe_tokens
-                ) if event_idx < event_length                
+                ) if event_idx > flatten_cut_idx                
             ]
             
             fl_input = (
                 [cls_token_id]
                 + [j for i in [table_name + event + time_interval for event_idx, table_name, event, time_interval in zip(
                         range(len(table_names_tokenized)), table_names_tokenized, events_tokenized, time_intervals_tokenized,
-                    ) if event_idx < event_length] for j in i]
+                    ) if event_idx > flatten_cut_idx] for j in i]
                 + [sep_token_id]
             )
 
@@ -739,7 +774,7 @@ class EHR(object):
                 [self.cls_type_id]
                 + [j for i in [table_type_token + col_val_type_token + timeint_type_token for event_idx, table_type_token, col_val_type_token, timeint_type_token in zip(
                         range(len(table_names_tokenized)), table_type_tokens, col_val_type_tokens, timeint_type_tokens,
-                    ) if event_idx < event_length] for j in i]
+                    ) if event_idx > flatten_cut_idx] for j in i]
                 + [self.sep_type_id]
             )
 
@@ -747,7 +782,7 @@ class EHR(object):
                 [self.others_dpe_id]
                 + [j for i in [table_dpe_token + col_val_dpe_token + timeint_dpe_token for event_idx, table_dpe_token, col_val_dpe_token, timeint_dpe_token in zip(
                         range(len(table_names_tokenized)), table_dpe_tokens, col_val_dpe_tokens, timeint_dpe_tokens,
-                    ) if event_idx < event_length] for j in i]
+                    ) if event_idx > flatten_cut_idx] for j in i]
                 + [self.others_dpe_id]
             )
 
@@ -767,19 +802,20 @@ class EHR(object):
             hierarchical_data[hierarchical_data_index:hierarchical_data_index + event_length, :, :] = np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16)
             hierarchical_data_index+=event_length
 
-            flatten_data[icustay_idx, :, :] = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16)
+            flatten_data[flatten_data_index, :, :] = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16)
+            flatten_data_index+=1
 
             hierarchical_data.flush()
             flatten_data.flush()
+            
+        cohorts.dropna(subset=['hi_starts'], inplace=True)
+        # Should consider hadm_id for split
+        shuffled = cohorts.groupby(self.hadm_key)[self.hadm_key].count().sample(frac=1, random_state=self.seed)
+        cum_len = shuffled.cumsum()
 
-            p = rand.random()
-            if self.valid_percent * 2 <= p:
-                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'split'] = 'train'
-            elif self.valid_percent <= p:
-                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'split'] = 'valid'
-            else:
-                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'split'] = 'test'
-        
+        cohorts.loc[cohorts[self.hadm_key].isin(shuffled[cum_len < int(len(shuffled)*0.8)].index), 'split'] = 'train'
+        cohorts.loc[cohorts[self.hadm_key].isin(shuffled[(cum_len >= int(len(shuffled)*0.8)) & (cum_len < int(len(shuffled)*0.9))].index), 'split'] = 'valid'
+        cohorts.loc[cohorts[self.hadm_key].isin(shuffled[cum_len >= int(len(shuffled)*0.9)].index), 'split'] = 'test'
 
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'))
 
@@ -825,6 +861,8 @@ class EHR(object):
     def make_compatible(self, icustays):
         """
         make different ehrs compatible with one another here
+        NOTE: outtime/dischtime is converted to relative minutes from intime
+            but, maintain the intime as the original value for later use
         """
         raise NotImplementedError()
 

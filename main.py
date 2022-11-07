@@ -38,7 +38,8 @@ def get_parser():
 
     # data
     parser.add_argument(
-        "--ehr", type=str, required=True, help="name of the ehr system to be processed."
+        "--ehr", type=str, required=True, choices=['mimiciii', 'mimiciv', 'eicu'],
+        help="name of the ehr system to be processed."
     )
     parser.add_argument(
         "--data",
@@ -127,6 +128,15 @@ def get_parser():
         help='max token length for each patient (Flatten)'
     )
 
+    parser.add_argument(
+        '--rolling_from_last', action='store_true',
+        help='whether to start from the last event or not. If true, then observe last (obs_size, obs_size*2, ...) hours before (time_gap) from discharge'
+    )
+
+    parser.add_argument(
+        '--use_more_tables', action='store_true',
+        help='Use more tables including chartevents, Not supported on MIMIC-III'
+    )
     return parser
 
 
