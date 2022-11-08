@@ -177,7 +177,7 @@ class FlattenEHRDataset(BaseEHRDataset):
             dtype=np.int16,
             shape=(3, self.args.max_patient_token_len),
             mode="r",
-            offset=row['fl_index'] * 3 * 2 * self.args.max_patient_token_len,
+            offset=row['fl_idx'] * 3 * 2 * self.args.max_patient_token_len,
         )
         return {
             "input_ids": torch.IntTensor(data[0, :]),

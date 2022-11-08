@@ -12,7 +12,6 @@ import numpy as np
 
 from transformers import AutoTokenizer
 from sortedcontainers import SortedList
-from tqdm import tqdm
 from pandarallel import pandarallel
 
 logger = logging.getLogger(__name__)
@@ -427,7 +426,7 @@ class EHR(object):
             # Rearrange TIME to be relative to outtime (for rolling_from_last)
             events[timestamp_key] = events[timestamp_key] - events['OUTTIME'] + gap_size * 60
             
-            events.drop(columns=["INTIME", "OUTTIME", self.hadm_key], inplace=True)
+            events.drop(columns=["INTIME", "OUTTIME", self.hadm_key], inplace=True, errors="ignore")
 
             def linearize_event(event):
                 cols = []
@@ -488,21 +487,19 @@ class EHR(object):
         #         return self.encoded_events
         total_events = sum([len(v) for v in cohort_events.values()])
 
-        hierarchical_data = np.memmap(
+        np.memmap(
             os.path.join(self.dest, f'{self.ehr_name}.hi.npy'),
             dtype=np.int16,
             mode='w+',
             shape=(total_events, 3, self.max_event_token_len)
         )
-        flatten_data = np.memmap(
+        np.memmap(
             os.path.join(self.dest, f'{self.ehr_name}.fl.npy'),
             dtype=np.int16,
             mode='w+',
             shape=(len(cohorts),3, self.max_patient_token_len)
         )
 
-        hierarchical_data_index = 0
-        flatten_data_index = 0
         # XXX special tokens for the time interval (zero, last)
         zero_time_interval = 0
         last_time_interval = -1
@@ -575,7 +572,9 @@ class EHR(object):
 
         del time_intervals_flattened
         del time_intervals
-        cohorts[['hi_start', 'flatten_start']]=None
+        cohorts.reset_index(names='fl_idx', inplace=True)
+        icustay_id_to_hi_start = dict(zip(encoded_events.keys(), np.cumsum([len(i) for i in encoded_events.values()])))
+        cohorts['hi_end'] = cohorts[self.icustay_key].map(icustay_id_to_hi_start)
         """
         1) we can batch_encode list of table_names / list of event_strings / list of time_intervals
         2) recover events: list of [tokenized(table_name), tokenized(event_string), [TIME_INT_{}]]
@@ -592,7 +591,12 @@ class EHR(object):
             4-4) num_events -= i, flattened = flattened[-(flattened_size - index):], hier = hier[-(num_events):]
         5) prepend [CLS], append [SEP] for each hierarchical event, for each flattened event
         """
-        for icustay_id, events_per_icustay in tqdm(encoded_events.items()):
+        # Cannot know hi idx at here -> approximate
+        # Parallelize encoding    
+        
+        def encode_stay(row):
+            icustay_id, events_per_icustay = row[self.icustay_key], encoded_events[row[self.icustay_key]]
+            
             times = collated_timestamps[icustay_id]
             # make list of table names
             table_names = [x[0] for x in events_per_icustay]
@@ -697,6 +701,7 @@ class EHR(object):
                 event_length = len(flatten_lens)
                 times = times[-event_length:]
 
+            hi_end = cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_end'].values[0]
             if self.rolling_from_last:
                 # For icu len:
                 # Iteratively add hi_start and hi_end and time_len
@@ -710,17 +715,17 @@ class EHR(object):
                         break
                     starts.append(np.searchsorted(times, -obs_len))
                 if starts == []:
-                    continue
+                    {
+                        "hi_start": None,
+                        "fl_start": None,
+                    }
                 # To allocate list to cell
-                cohort_idx = cohorts.index[cohorts[self.icustay_key]==icustay_id][0]
-                cohorts.at[cohort_idx, 'hi_start'] = [i + hierarchical_data_index for i in starts]
-                cohorts.at[cohort_idx, 'flatten_start'] = [flatten_lens[i]+1 for i in starts]
+                hi_start = [-event_length + i + hi_end for i in starts]
+                fl_start = [flatten_lens[i-1]+1 for i in starts]
             else:
-                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_start'] = hierarchical_data_index
-                cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'flatten_start'] = 0
+                hi_start = hi_end - event_length
+                fl_start = 0
 
-            cohorts.loc[cohorts[self.icustay_key]== icustay_id, 'hi_end'] = hierarchical_data_index + event_length
-            cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'flatten_idx'] = flatten_data_index
             hi_input = [
                 [cls_token_id] + table_name + event + time_interval + [sep_token_id]
                 for event_idx, table_name, event, time_interval in zip(
@@ -779,17 +784,39 @@ class EHR(object):
             fl_type = np.pad(fl_type, (0, self.max_patient_token_len - len(fl_type)), mode='constant')
             fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
             
-            # Save data into memmap format
-            hierarchical_data[hierarchical_data_index:hierarchical_data_index + event_length, :, :] = np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16)
-            hierarchical_data_index+=event_length
+            fl_idx = cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'fl_idx'].values[0]
 
-            flatten_data[flatten_data_index, :, :] = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16)
-            flatten_data_index+=1
+            hierarchical_data = np.memmap(
+                os.path.join(self.dest, f'{self.ehr_name}.hi.npy'),
+                dtype=np.int16,
+                mode='r+',
+                shape=(event_length, 3, self.max_event_token_len),
+                offset = (hi_end - event_length) * 3 * self.max_event_token_len * 2,
+            )
+            flatten_data = np.memmap(
+                os.path.join(self.dest, f'{self.ehr_name}.fl.npy'),
+                dtype=np.int16,
+                mode='r+',
+                shape=(1, 3, self.max_patient_token_len),
+                offset = fl_idx * 3 * self.max_patient_token_len * 2,
+            )
+
+            # Save data into memmap format
+            hierarchical_data[:, :, :] = np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16)
+
+            flatten_data[0, :, :] = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16)
 
             hierarchical_data.flush()
             flatten_data.flush()
-            
-        cohorts.dropna(subset=['hi_start'], inplace=True)
+            return {
+                "hi_start": hi_start,
+                "fl_start": fl_start,
+            }
+
+        indices_df = pd.DataFrame(list(cohorts.parallel_apply(encode_stay, axis=1)))
+        cohorts = pd.concat([cohorts, indices_df], axis=1)
+        if self.rolling_from_last:
+            cohorts = cohorts[cohorts['hi_start'].str.len()!=0]
         # Should consider hadm_id for split
         shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=self.seed)
         cum_len = shuffled.cumsum()
@@ -806,8 +833,7 @@ class EHR(object):
 
         logger.info("Done encoding events.")
 
-        # NOTE return hierarchical input
-        return encoded_events
+        return
 
     def run_pipeline(self) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
@@ -891,7 +917,7 @@ class EHR(object):
         else:
             return None
 
-    def infer_data_extension(self, threshold=10) -> str:
+    def infer_data_extension(self) -> str:
         raise NotImplementedError()
 
     def download_ehr_from_url(self, url, dest) -> None:

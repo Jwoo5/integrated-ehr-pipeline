@@ -138,7 +138,7 @@ class MIMICIV(EHR):
                     "exclude": [
                         "chartdate",
                         "storetime",
-                        "storedate"
+                        "storedate",
                         "subject_id",
                         "microevent_id",
                         "micro_specimen_id",
@@ -154,7 +154,7 @@ class MIMICIV(EHR):
                     "timeoffsetunit": "abs",
                     "exclude": [
                         "storetime",
-                        "endtime"
+                        "endtime",
                         "subject_id",
                         "orderid",
                         "linkorderid",
