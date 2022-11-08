@@ -13,6 +13,7 @@ import numpy as np
 from transformers import AutoTokenizer
 from sortedcontainers import SortedList
 from tqdm import tqdm
+from pandarallel import pandarallel
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 class EHR(object):
     def __init__(self, cfg):
         self.cfg = cfg
+
+        pandarallel.initialize(progress_bar=False, nb_workers=cfg.num_threads)
 
         self.cache = cfg.cache
         cache_dir = os.path.expanduser("~/.cache/ehr")
@@ -194,6 +197,7 @@ class EHR(object):
         labeled_cohorts = cohorts[[
             self.hadm_key,
             self.icustay_key,
+            self.patient_key,
             "readmission",
             "INTIME",
             "OUTTIME",
@@ -333,22 +337,11 @@ class EHR(object):
             "Start preparing medical events for each cohort."
         )
 
-        icustays_by_hadm_key = cohorts.groupby(self.hadm_key)[
-            self.icustay_key
-        ].apply(list)
-        icustay_to_intime = dict(
-            zip(cohorts[self.icustay_key], cohorts["INTIME"])
-        )
-        icustay_to_outtime = dict(
-            zip(cohorts[self.icustay_key], cohorts["OUTTIME"])
-        )
-
-        cohorts.drop(columns=["INTIME"], inplace=True)
-
         cohort_events = {id: SortedList() for id in cohorts[self.icustay_key].to_list()}
 
         for table in self.tables:
             fname = table["fname"]
+            table_name = fname.split('/')[-1][: -len(self.ext)]
             timestamp_key = table["timestamp"]
             excludes = table["exclude"]
             obs_size = self.obs_size
@@ -381,111 +374,94 @@ class EHR(object):
                             fname, [self.icustay_key, self.hadm_key]
                         )
                     )
-
-            chunks = pd.read_csv(
-                os.path.join(self.data_dir, fname), chunksize=self.chunk_size
+            # Parallelize this part
+            # Use pandarallel
+            events = pd.read_csv(
+                os.path.join(self.data_dir, fname)
             )
-            for events in tqdm(chunks):
-                events = events.drop(columns=excludes)
-                if infer_icustay_from_hadm_key:
-                    events = events[events[self.hadm_key].isin(list(icustays_by_hadm_key.keys()))]
-                else:
+            events.drop(columns=excludes, inplace=True)
+            if infer_icustay_from_hadm_key:
+                events = events[events[self.hadm_key].isin(cohorts[self.hadm_key])]
+            else:
+                events = events[events[self.icustay_key].isin(cohorts[self.icustay_key])]
+
+            if table["timeoffsetunit"] == 'abs':
+                events[timestamp_key] = pd.to_datetime(
+                    events[timestamp_key], infer_datetime_format=True
+                )
+
+            if infer_icustay_from_hadm_key:
+                events = events.merge(
+                    cohorts[[self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"]],
+                    on=self.hadm_key,
+                    how="inner"
+                )
+                if table['timeoffsetunit'] == 'abs':
+                    events["TEMP_TIME"] = (events[timestamp_key] - events["INTIME"]).dt.total_seconds() // 60
+                    events = events[(events["TEMP_TIME"]>= 0) & (events["TEMP_TIME"]<=events["OUTTIME"])]
+                    events.drop(columns=["TEMP_TIME"], inplace=True)
                     events = events[events[self.icustay_key].isin(cohorts[self.icustay_key])]
+                else:
+                    # All tables in eICU has icustay_key -> no need to handle
+                    raise NotImplementedError()
 
-                if len(events) == 0:
-                    continue
+            else:
+                events = events.merge(cohorts[[self.icustay_key, "INTIME", "OUTTIME"]], on=self.icustay_key, how="inner")
+            # Convert time compatible to relative minutes from intime
+            # Type timedelta
+            if table['timeoffsetunit'] =='abs':
+                events[timestamp_key] = (events[timestamp_key] - events["INTIME"]).dt.total_seconds() // 60
+            # Type int, relative minute from intime
+            # Outtime is also relative offset from intime
+            elif table['timeoffsetunit'] =='min':
+                events[timestamp_key] = events[timestamp_key]
+            else:
+                raise NotImplementedError()
+            
+            # which means that the event has been charted before / after the icustay
+            if self.rolling_from_last:
+                events = events[(events[timestamp_key]>=0) & (events[timestamp_key]<=events['OUTTIME']-gap_size*60)]
+            else:
+                events = events[(events[timestamp_key]>=0) & (events[timestamp_key]<=obs_size*60)]
 
-                if table["timeoffsetunit"] == 'abs':
-                    events[timestamp_key] = pd.to_datetime(
-                        events[timestamp_key], infer_datetime_format=True
-                    )
+            # Rearrange TIME to be relative to outtime (for rolling_from_last)
+            events[timestamp_key] = events[timestamp_key] - events['OUTTIME'] + gap_size * 60
+            
+            events.drop(columns=["INTIME", "OUTTIME", self.hadm_key], inplace=True)
 
-                for _, event in events.iterrows():
-                    if infer_icustay_from_hadm_key:
-                        # infer icustay id for the event based on `self.hadm_key`
-                        hadm_key_icustays = icustays_by_hadm_key[
-                            event[self.hadm_key]
-                        ]
-                        for icustay_id in hadm_key_icustays:
-                            intime = icustay_to_intime[icustay_id]
-                            outtime = icustay_to_outtime[icustay_id]
-                            if table['timeoffsetunit'] == 'abs':
-                                charttime = (event[timestamp_key] - intime).total_seconds() // 60
-                                if charttime >=0 and charttime <= outtime:
-                                    event[self.icustay_key] = icustay_id
-                                    break
-                            else:
-                                # All tables in eICU has icustay_key -> no need to handle
-                                raise NotImplementedError()
+            def linearize_event(event):
+                cols = []
+                vals = []
+                for col, val in event.to_dict().items():
+                    if pd.isna(val) or col in [self.icustay_key, timestamp_key]:
+                        continue
+                    # convert code to description if applicable
+                    if (
+                        code_to_descriptions is not None
+                        and col in code_to_descriptions
+                    ):
+                        val = code_to_descriptions[col][val]
+                    if re.search(r"\d+\.\d+\.\d+", str(val)) or re.search(r"\d+\.\d+\.\d+", str(col)):
+                        logger.warn("val: {} col:{} has the irregular numeric format".format(val, col))
+                    val = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(val))
+                    col = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(col))
 
-                        # which means that the event has no corresponding icustay
-                        if self.icustay_key not in event:
-                            continue
-                    else:
-                        intime = icustay_to_intime[event[self.icustay_key]]
-                        outtime = icustay_to_outtime[event[self.icustay_key]]
+                    cols.append(col)
+                    vals.append(val)
+                event_string = (cols, vals)
 
-                    # Convert time compatible to relative minutes from intime
-                    # Type timedelta
-                    if table['timeoffsetunit'] =='abs':
-                        charttime = (event[timestamp_key] - intime).total_seconds() // 60
+                return (event[self.icustay_key], event[timestamp_key], table_name, event_string)
 
-                    # Type int, relative minute from intime
-                    # Outtime is also relative offset from intime
-                    elif table['timeoffsetunit'] =='min':
-                        charttime = event[timestamp_key]
-                    
-                    else:
-                        raise NotImplementedError()
-                    
-                    # which means that the event has been charted before / after the icustay
-                    if self.rolling_from_last:
-                        if not (0 <= charttime and charttime <= outtime - gap_size * 60):
-                            continue
-                    else:
-                        if not (0 <= charttime and charttime <= obs_size * 60):
-                            continue
+            linearized_events = events.parallel_apply(linearize_event, axis=1)
+            
+            [cohort_events[stay_id].add((i, j, k)) for stay_id, i, j, k in linearized_events]
 
-                    # Rearrange Charttime to be relative to outtime (for rolling_from_last)
-                    charttime = charttime - outtime + gap_size * 60
-
-                    icustay_id = event[self.icustay_key]
-                    if icustay_id in cohort_events:
-                        event = event.drop(
-                            labels=[self.icustay_key, self.hadm_key, timestamp_key],
-                            errors='ignore'
-                        )
-                        cols = []
-                        vals = []
-                        for col, val in event.to_dict().items():
-                            if pd.isna(val):
-                                continue
-                            # convert code to description if applicable
-                            if (
-                                code_to_descriptions is not None
-                                and col in code_to_descriptions
-                            ):
-                                val = code_to_descriptions[col][val]
-                            if re.search(r"\d+\.\d+\.\d+", str(val)) or re.search(r"\d+\.\d+\.\d+", str(col)):
-                                logger.warn("val: {} col:{} has the irregular numeric format".format(val, col))
-                            val = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(val))
-                            col = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(col))
-
-                            cols.append(col)
-                            vals.append(val)
-
-                        event_string = (cols, vals)
-
-                        cohort_events[icustay_id].add(
-                            (charttime, fname[: -len(self.ext)], event_string)
-                        )
-        total = len(cohort_events)
         cohort_events = {
             k: list(v) if len(v) <= self.max_event_size else list(v[-self.max_event_size:])
             for k, v in cohort_events.items()
             if len(v) >= self.min_event_size
         }
-        skipped = total - len(cohort_events)
+        skipped = len(cohorts) - len(cohort_events)
         # Should remove skipped patients from cohort
         cohorts = cohorts[cohorts[self.icustay_key].isin(cohort_events.keys())].reset_index(drop=True)
 

@@ -137,6 +137,10 @@ def get_parser():
         '--use_more_tables', action='store_true',
         help='Use more tables including chartevents, Not supported on MIMIC-III'
     )
+
+    parser.add_argument(
+        '--num_threads', type=int, default=8, help='number of threads to use'
+    )
     return parser
 
 
