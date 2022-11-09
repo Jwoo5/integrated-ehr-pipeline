@@ -79,12 +79,12 @@ class EHR(object):
         self.special_tokens_dict = dict()
         self.max_special_tokens = 100
 
-        self.table_type_id = 0
-        self.column_type_id = 1
-        self.value_type_id = 2
-        self.timeint_type_id = 3
-        self.cls_type_id = 4
-        self.sep_type_id = 5
+        self.table_type_id = 1
+        self.column_type_id = 2
+        self.value_type_id = 3
+        self.timeint_type_id = 4
+        self.cls_type_id = 5
+        self.sep_type_id = 6
 
         self.others_dpe_id = 0
 
