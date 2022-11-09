@@ -6,7 +6,7 @@ import argparse
 import os
 from torch.nn.functional import one_hot
 from torch.nn.utils.rnn import pad_sequence
-
+import h5py
 
 """
 Sample Dataset for Integrated-EHR-Pipeline
@@ -71,10 +71,14 @@ class BaseEHRDataset(Dataset):
         super().__init__()
 
         self.args = args
-        df_path = os.path.join(args.data, f"{args.ehr}.cohorts.labeled.index")
-        self.df = pd.read_pickle(df_path)
-        self.df = self.df[self.df["split"] == split]
-        self.data_path = None
+        self.data_path = os.path.join(args.data, f"{args.ehr}.h5")
+
+        self.data = h5py.File(self.data_path, "r")['ehr']
+        self.keys = []
+        for key in self.data.keys():
+            if self.data[key].attrs["split"]==split:
+                self.keys.append(key)
+        self.pred_target = args.pred_target
 
         self.num_classes = {
             "mimiciii": {
@@ -104,12 +108,11 @@ class BaseEHRDataset(Dataset):
                 "imminent_discharge": 9,
                 "diagnosis": 18,
             }
-
         }[self.args.ehr][self.args.pred_target]
 
 
     def __len__(self):
-        return len(self.df)
+        return len(self.keys)
 
     def __getitem__(self, idx):
         raise NotImplementedError()
@@ -140,26 +143,17 @@ class BaseEHRDataset(Dataset):
 class HierarchicalEHRDataset(BaseEHRDataset):
     def __init__(self, args, split):
         super().__init__(args, split)
-        self.data_path = os.path.join(args.data, f"{args.ehr}.hi.npy")
 
     def __getitem__(self, idx):
         # NOTE: Warning occurs when converting np.int16 read-only array into tensor, but ignoreable
-        row = self.df.iloc[idx]
-
-        assert row["hi_end"] - row["hi_start"] <= self.args.max_event_size
-
-        data = np.memmap(
-            self.data_path,
-            dtype=np.int16,
-            shape=(row["hi_end"] - row["hi_start"], 3, self.args.max_event_token_len),
-            mode="r",
-            offset=row["hi_start"] * 3 * 2 * self.args.max_event_token_len,
-        )
+        
+        data = self.data[self.keys[idx]]['hi']
+        label = self.data[self.keys[idx]].attrs[self.pred_target]
         return {
             "input_ids": torch.IntTensor(data[:, 0, :]),
             "type_ids": torch.IntTensor(data[:, 1, :]),
             "dpe_ids": torch.IntTensor(data[:, 2, :]),
-            "label": row[self.args.pred_target],
+            "label": label
         }
 
 
@@ -170,18 +164,22 @@ class FlattenEHRDataset(BaseEHRDataset):
 
     def __getitem__(self, idx):
         # NOTE: Warning occurs when converting np.int16 read-only array into tensor, but ignoreable
-        row = self.df.iloc[idx]
-
-        data = np.memmap(
-            self.data_path,
-            dtype=np.int16,
-            shape=(3, self.args.max_patient_token_len),
-            mode="r",
-            offset=row['fl_idx'] * 3 * 2 * self.args.max_patient_token_len,
-        )
+        data = self.data[self.keys[idx]]['fl']
+        label = self.data[self.keys[idx]].attrs[self.pred_target]
         return {
             "input_ids": torch.IntTensor(data[0, :]),
             "type_ids": torch.IntTensor(data[1, :]),
             "dpe_ids": torch.IntTensor(data[2, :]),
-            "label": row[self.args.pred_target],
+            "label": label,
         }
+
+def main():
+    args = get_parser().parse_args()
+    dataset = HierarchicalEHRDataset(args, "train")
+    print(dataset.__getitem__(1))
+    dataset = FlattenEHRDataset(args, "train")
+    print(dataset.__getitem__(1))
+    pass
+
+if __name__=="__main__":
+    main()

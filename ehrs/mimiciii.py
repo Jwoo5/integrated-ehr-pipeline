@@ -171,7 +171,7 @@ class MIMICIII(EHR):
         admissions = pd.read_csv(os.path.join(self.data_dir, self.admission_fname))
 
         # prepare icustays according to the appropriate format
-        icustays = icustays[icustays["FIRST_CAREUNIT"] == icustays["LAST_CAREUNIT"]].copy()
+        icustays = icustays[icustays["FIRST_CAREUNIT"] == icustays["LAST_CAREUNIT"]]
         icustays.loc[:, "INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True
         )

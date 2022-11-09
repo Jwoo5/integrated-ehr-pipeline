@@ -251,7 +251,7 @@ class MIMICIV(EHR):
             "dischtime": "DISCHTIME",
         })
 
-        icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]].copy()
+        icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
         icustays.loc[:, "INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True
         )
