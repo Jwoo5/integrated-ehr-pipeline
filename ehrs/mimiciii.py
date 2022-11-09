@@ -111,6 +111,8 @@ class MIMICIII(EHR):
         self._hadm_key = "HADM_ID"
         self._patient_key = "SUBJECT_ID"
 
+        self.determine_first_icu = "INTIME"
+
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 
@@ -216,7 +218,7 @@ class MIMICIII(EHR):
             icustays["DISCHTIME"], infer_datetime_format=True
         )
 
-        icustays.loc["IN_ICU_MORTALITY"] = (
+        icustays["IN_ICU_MORTALITY"] = (
             (icustays["INTIME"] < icustays["DISCHTIME"])
             & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
             & (icustays["DISCHARGE_LOCATION"] == "Death")

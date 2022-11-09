@@ -139,6 +139,8 @@ class eICU(EHR):
         self._hadm_key = "patienthealthsystemstayid"
         self._patient_key = "uniquepid"
 
+        self.determine_first_icu = "unitvisitnumber"
+
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 

@@ -171,6 +171,8 @@ class MIMICIV(EHR):
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
 
+        self.determine_first_icu = "INTIME"
+
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 
@@ -249,11 +251,11 @@ class MIMICIV(EHR):
             "dischtime": "DISCHTIME",
         })
 
-        icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
-        icustays["INTIME"] = pd.to_datetime(
+        icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]].copy()
+        icustays.loc[:, "INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True
         )
-        icustays["OUTTIME"] = pd.to_datetime(
+        icustays.loc[:, "OUTTIME"] = pd.to_datetime(
             icustays["OUTTIME"], infer_datetime_format=True
         )
 

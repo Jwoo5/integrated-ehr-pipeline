@@ -162,13 +162,15 @@ class EHR(object):
         icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
         icustays["readmission"] = 1
         icustays.loc[
-            icustays.groupby(self.hadm_key)["INTIME"].idxmax(),
+            icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
             "readmission"
         ] = 0
         if self.first_icu:
-            icustays = icustays.groupby(self.hadm_key).first().reset_index()
+            icustays = icustays.loc[
+                icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmin()
+            ]
 
-        cohorts = icustays
+        cohorts = icustays.reset_index()
 
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(
