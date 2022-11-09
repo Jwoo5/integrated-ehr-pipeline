@@ -104,12 +104,6 @@ class eICU(EHR):
                 "exclude": ["intakeoutputentryoffset", "intakeoutputid"],
             },
             {
-                "fname": "customLab" + self.ext,
-                "timestamp": "labotheroffset",
-                "timeoffsetunit": "min",
-                "exclude": ["customlabid"],
-            },
-            {
                 "fname": "microLab" + self.ext,
                 "timestamp": "culturetakenoffset",
                 "timeoffsetunit": "min",
@@ -196,7 +190,6 @@ class eICU(EHR):
         # hacks for compatibility with other ehrs
         icustays["INTIME"] = 0
         icustays.rename(columns={"unitdischargeoffset": "OUTTIME"}, inplace=True)
-        icustays["OUTTIME"] = icustays["OUTTIME"] / 60
         # DEATHTIME
         # icustays["DEATHTIME"] = np.nan
         # is_discharged_in_icu = icustays["unitdischargestatus"] == "Expired"
@@ -212,10 +205,10 @@ class eICU(EHR):
         # ) + 1
 
         icustays.rename(columns={"hospitaldischargeoffset": "DISCHTIME"}, inplace=True)
-        icustays["DISCHTIME"] = icustays["DISCHTIME"] / 60
+
+        icustays["IN_ICU_MORTALITY"] = icustays["unitdischargestatus"] == "Expired"
 
         icustays.rename(columns={
-            "unitdischargelocation": "ICU_DISCHARGE_LOCATION",
             "hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"
         }, inplace=True)
 

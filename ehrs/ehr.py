@@ -9,13 +9,12 @@ from typing import Union, List
 
 import pandas as pd
 import numpy as np
-
+from tqdm import tqdm
 from transformers import AutoTokenizer
 from sortedcontainers import SortedList
 from pandarallel import pandarallel
 
 logger = logging.getLogger(__name__)
-
 
 class EHR(object):
     def __init__(self, cfg):
@@ -201,7 +200,7 @@ class EHR(object):
             "INTIME",
             "OUTTIME",
             "DISCHTIME",
-            "ICU_DISCHARGE_LOCATION",
+            "IN_ICU_MORTALITY",
             "HOS_DISCHARGE_LOCATION",
         ]].copy()
 
@@ -217,7 +216,7 @@ class EHR(object):
         if self.rolling_from_last:
             labeled_cohorts["mortality"] = (
                 (
-                (labeled_cohorts["ICU_DISCHARGE_LOCATION"] == "Death")
+                (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
                 | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                 )
                 & (
@@ -227,7 +226,7 @@ class EHR(object):
         else:
             labeled_cohorts["mortality"] = (
                 (
-                    (labeled_cohorts["ICU_DISCHARGE_LOCATION"] == "Death")
+                    (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
                     | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                 )
                 & (
@@ -239,21 +238,18 @@ class EHR(object):
             ).astype(int)
         # if the discharge of 'Death' occurs in icu or hospital
         # we retain these cases for the imminent discharge task
-        labeled_cohorts["in_icu_mortality"] = (
-            labeled_cohorts["ICU_DISCHARGE_LOCATION"] == "Death"
-        ).astype(int)
-        labeled_cohorts["in_hospital_mortality"] = (
-            (labeled_cohorts["ICU_DISCHARGE_LOCATION"] != "Death")
+        labeled_cohorts["IN_HOSPITAL_MORTALITY"] = (
+            (~labeled_cohorts["IN_ICU_MORTALITY"])
             & (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
         ).astype(int)
 
         # define final acuity prediction task
         labeled_cohorts["final_acuity"] = labeled_cohorts["HOS_DISCHARGE_LOCATION"]
         labeled_cohorts.loc[
-            labeled_cohorts["in_icu_mortality"] == 1, "final_acuity"
+            labeled_cohorts["IN_ICU_MORTALITY"] == 1, "final_acuity"
         ] = "IN_ICU_MORTALITY"
         labeled_cohorts.loc[
-            labeled_cohorts["in_hospital_mortality"] == 1, "final_acuity"
+            labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1, "final_acuity"
         ] = "IN_HOSPITAL_MORTALITY"
         # NOTE we drop null value samples
         labeled_cohorts = labeled_cohorts[~labeled_cohorts["final_acuity"].isna()]
@@ -286,8 +282,8 @@ class EHR(object):
         ]
         labeled_cohorts.loc[
             is_discharged & (
-                (labeled_cohorts["in_icu_mortality"] == 1)
-                | (labeled_cohorts["in_hospital_mortality"] == 1)
+                (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
+                | (labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1)
             ),
             "imminent_discharge"
         ] = "Death"
@@ -309,10 +305,9 @@ class EHR(object):
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
             columns=[
-                "in_icu_mortality",
-                "in_hospital_mortality",
+                "IN_ICU_MORTALITY",
+                "IN_HOSPITAL_MORTALITY",
                 "DISCHTIME",
-                "ICU_DISCHARGE_LOCATION",
                 "HOS_DISCHARGE_LOCATION"
             ]
         )
@@ -325,7 +320,7 @@ class EHR(object):
 
     def prepare_events(self, cohorts, cached=False):
         if cached:
-            cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dropped")
+            cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx.dropped")
             cohort_events = self.load_from_cache(self.ehr_name + ".events")
             if (cohorts is not None) and (cohort_events is not None):
                 return cohorts, cohort_events
@@ -413,7 +408,7 @@ class EHR(object):
             # Type int, relative minute from intime
             # Outtime is also relative offset from intime
             elif table['timeoffsetunit'] =='min':
-                events[timestamp_key] = events[timestamp_key]
+                pass
             else:
                 raise NotImplementedError()
             
@@ -471,7 +466,7 @@ class EHR(object):
         )
 
         self.save_to_cache(
-            cohorts, self.ehr_name + ".cohorts.labeled.dropped", use_pickle=True
+            cohorts, self.ehr_name + ".cohorts.labeled.dx.dropped", use_pickle=True
         )
         self.save_to_cache(
             cohort_events, self.ehr_name + ".events", use_pickle=True
@@ -540,16 +535,13 @@ class EHR(object):
             + ["[TIME_INT_{}]".format(i) for i in range(1, len(bins))]
         )
 
-        def _quantize(t: pd.Timedelta):
+        def _quantize(t: int):
             if t == zero_time_interval:
                 return self.special_tokens_dict["[TIME_INT_ZERO]"]
             elif t == last_time_interval:
                 return self.special_tokens_dict["[TIME_INT_LAST]"]
-            for i, b in enumerate(bins[1:], start=1):
-                if t <= b:
-                    return self.special_tokens_dict["[TIME_INT_{}]".format(i)]
-
-            raise AssertionError("???")
+            token_idx = np.searchsorted(bins[1:], t)+1
+            return self.special_tokens_dict["[TIME_INT_{}]".format(token_idx)]
 
         time_intervals = {
             k: map(_quantize, v) for k, v in time_intervals.items()
@@ -562,16 +554,18 @@ class EHR(object):
         cls_token_id = tokenizer.cls_token_id
         sep_token_id = tokenizer.sep_token_id
 
+        # icustay_id: [(rel time, table name, events string, time token)...]
         encoded_events = {
             k: [
-                (event[1], event[2], t_int)
+                (*event, t_int)
                 for event, t_int in zip(v, time_intervals[k])
             ]
             for k, v in cohort_events.items()
         }
-
+        logger.info("Finished time interval processing.")
         del time_intervals_flattened
         del time_intervals
+        del cohort_events
         cohorts.reset_index(names='fl_idx', inplace=True)
         icustay_id_to_hi_start = dict(zip(encoded_events.keys(), np.cumsum([len(i) for i in encoded_events.values()])))
         cohorts['hi_end'] = cohorts[self.icustay_key].map(icustay_id_to_hi_start)
@@ -594,19 +588,19 @@ class EHR(object):
         # Cannot know hi idx at here -> approximate
         # Parallelize encoding    
         
-        def encode_stay(row):
-            icustay_id, events_per_icustay = row[self.icustay_key], encoded_events[row[self.icustay_key]]
-            
-            times = collated_timestamps[icustay_id]
+
+        def encode_stay(input):
+            events_per_icustay, hi_end, fl_idx = input
+            times = [x[0] for x in events_per_icustay]
             # make list of table names
-            table_names = [x[0] for x in events_per_icustay]
+            table_names = [x[1] for x in events_per_icustay]
             # tokenize table names
             table_names_tokenized = tokenizer(table_names, add_special_tokens=False).input_ids
             # generate the same shape list filled with self.table_type_id
             table_type_tokens = [[self.table_type_id] * len(x) for x in table_names_tokenized]
             table_dpe_tokens = [[self.others_dpe_id] * len(x) for x in table_names_tokenized]
             # make list of events: (cols, vals)
-            event_strings = [x[1] for x in events_per_icustay] # list of (List[cols], List[vals])
+            event_strings = [x[2] for x in events_per_icustay] # list of (List[cols], List[vals])
 
             # tokenize column names
             # cols_tokenized: List[List[List[col_tokens]]]
@@ -674,7 +668,7 @@ class EHR(object):
                 col_val_dpe_tokens.append(col_val_dpe_token)
 
             # make list of time intervals
-            time_intervals = [x[2] for x in events_per_icustay]
+            time_intervals = [x[3] for x in events_per_icustay]
             # tokenize time intervals
             # this should yield a corresponding special token id for each time interval
             time_intervals_tokenized = tokenizer(
@@ -701,7 +695,6 @@ class EHR(object):
                 event_length = len(flatten_lens)
                 times = times[-event_length:]
 
-            hi_end = cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'hi_end'].values[0]
             if self.rolling_from_last:
                 # For icu len:
                 # Iteratively add hi_start and hi_end and time_len
@@ -784,8 +777,6 @@ class EHR(object):
             fl_type = np.pad(fl_type, (0, self.max_patient_token_len - len(fl_type)), mode='constant')
             fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
             
-            fl_idx = cohorts.loc[cohorts[self.icustay_key]==icustay_id, 'fl_idx'].values[0]
-
             hierarchical_data = np.memmap(
                 os.path.join(self.dest, f'{self.ehr_name}.hi.npy'),
                 dtype=np.int16,
@@ -812,8 +803,11 @@ class EHR(object):
                 "hi_start": hi_start,
                 "fl_start": fl_start,
             }
+        # Do not need to pass whole cohorts df, only pass icustay_id, hi_end, fl_idx
 
-        indices_df = pd.DataFrame(list(cohorts.parallel_apply(encode_stay, axis=1)))
+        indices = [encode_stay((encoded_events[row[self.icustay_key]], row["hi_end"], row["fl_idx"])) for _, row in tqdm(cohorts.iterrows())]
+        indices_df = pd.DataFrame(indices)
+        del encoded_events
         cohorts = pd.concat([cohorts, indices_df], axis=1)
         if self.rolling_from_last:
             cohorts = cohorts[cohorts['hi_start'].str.len()!=0]
@@ -829,7 +823,7 @@ class EHR(object):
         cohorts.loc[cohorts[self.patient_key].isin(
             shuffled[cum_len >= int(len(shuffled)*2*self.valid_percent)].index), 'split'] = 'train'
 
-        cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'))
+        cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
 
         logger.info("Done encoding events.")
 
@@ -887,7 +881,7 @@ class EHR(object):
             "INTIME",
             "OUTTIME",
             "DISCHTIME",
-            "ICU_DISCHARGE_LOCATION",
+            "IN_ICU_MORTALITY",
             "HOS_DISCHARGE_LOCATION"
         ]
         for item in checklist:

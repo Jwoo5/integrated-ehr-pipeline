@@ -277,17 +277,12 @@ class MIMICIV(EHR):
             icustays["DISCHTIME"], infer_datetime_format=True
         )
 
-        icustays["ICU_DISCHARGE_LOCATION"] = np.nan
-        is_discharged_in_icu = (
+        icustays["IN_ICU_MORTALITY"] = (
             (icustays["INTIME"] < icustays["DISCHTIME"])
             & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
+            & (icustays["discharge_location"] == "Death")
         )
-        icustays.loc[
-            is_discharged_in_icu, "ICU_DISCHARGE_LOCATION"
-        ] = icustays.loc[is_discharged_in_icu, "discharge_location"]
-        icustays.loc[
-            ~is_discharged_in_icu, "HOS_DISCHARGE_LOCATION"
-        ] = icustays.loc[~is_discharged_in_icu, "discharge_location"]
+        icustays.rename(columns={"discharge_location": "HOS_DISCHARGE_LOCATION"}, inplace=True)
 
         icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
         icustays["OUTTIME"] = (icustays["OUTTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
