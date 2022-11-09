@@ -111,7 +111,7 @@ class MIMICIII(EHR):
         self._hadm_key = "HADM_ID"
         self._patient_key = "SUBJECT_ID"
 
-        self.determine_first_icu = "INTIME"
+        self._determine_first_icu = "INTIME"
 
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))

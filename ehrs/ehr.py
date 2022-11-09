@@ -128,6 +128,10 @@ class EHR(object):
         return self._patient_key
 
     @property
+    def determine_first_icu(self):
+        return self._determine_first_icu
+
+    @property
     def num_special_tokens(self):
         return len(self.special_tokens_dict)
 
