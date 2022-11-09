@@ -13,6 +13,8 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from sortedcontainers import SortedList
 from pandarallel import pandarallel
+import h5py
+from joblib import Parallel, delayed
 
 logger = logging.getLogger(__name__)
 
@@ -170,16 +172,14 @@ class EHR(object):
                 icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmin()
             ]
 
-        cohorts = icustays.reset_index()
-
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(
-                len(cohorts)
+                len(icustays)
             )
         )
-        self.save_to_cache(cohorts, self.ehr_name + ".cohorts")
+        self.save_to_cache(icustays, self.ehr_name + ".cohorts")
 
-        return cohorts
+        return icustays
 
     # TODO process specific tasks according to user choice?
     def prepare_tasks(self, cohorts, cached=False):
@@ -477,26 +477,16 @@ class EHR(object):
         return cohorts, cohort_events
 
     def encode_events(self, cohorts, cohort_events, cached=False):
-        # if cached:
-        #     encoded_events = self.load_from_cache(self.ehr_name + ".cohorts.labeled.events.encoded")
-        #     if encoded_events is not None:
-        #         self.encoded_events = encoded_events
-        #         return self.encoded_events
-        total_events = sum([len(v) for v in cohort_events.values()])
 
-        np.memmap(
-            os.path.join(self.dest, f'{self.ehr_name}.hi.npy'),
-            dtype=np.int16,
-            mode='w+',
-            shape=(total_events, 3, self.max_event_token_len)
-        )
-        np.memmap(
-            os.path.join(self.dest, f'{self.ehr_name}.fl.npy'),
-            dtype=np.int16,
-            mode='w+',
-            shape=(len(cohorts),3, self.max_patient_token_len)
-        )
-
+        # save results with h5py format
+        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
+        ehr_g = f.create_group("ehr")
+        # save hyperparameters
+        for k, v in vars(self.cfg).items():
+            if v:
+                ehr_g.attrs[k] = v
+        
+        # Process Time Intervals
         # XXX special tokens for the time interval (zero, last)
         zero_time_interval = 0
         last_time_interval = -1
@@ -568,9 +558,6 @@ class EHR(object):
         del time_intervals_flattened
         del time_intervals
         del cohort_events
-        cohorts.reset_index(names='fl_idx', inplace=True)
-        icustay_id_to_hi_start = dict(zip(encoded_events.keys(), np.cumsum([len(i) for i in encoded_events.values()])))
-        cohorts['hi_end'] = cohorts[self.icustay_key].map(icustay_id_to_hi_start)
         """
         1) we can batch_encode list of table_names / list of event_strings / list of time_intervals
         2) recover events: list of [tokenized(table_name), tokenized(event_string), [TIME_INT_{}]]
@@ -587,12 +574,10 @@ class EHR(object):
             4-4) num_events -= i, flattened = flattened[-(flattened_size - index):], hier = hier[-(num_events):]
         5) prepend [CLS], append [SEP] for each hierarchical event, for each flattened event
         """
-        # Cannot know hi idx at here -> approximate
-        # Parallelize encoding    
-        
+        # Parallelize encoding
+        def encode_stay(input, ehr_g):
+            stay_id, events_per_icustay = input
 
-        def encode_stay(input):
-            events_per_icustay, hi_end, fl_idx = input
             times = [x[0] for x in events_per_icustay]
             # make list of table names
             table_names = [x[1] for x in events_per_icustay]
@@ -703,22 +688,15 @@ class EHR(object):
                 # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
                 # Remove last n hours
                 max_obs_len = int(-((times[0] // (self.obs_size * 60)) * self.obs_size* 60))
-                starts = []
+                hi_start = []
                 for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
                     if np.searchsorted(times, -obs_len + self.obs_size * 60) -np.searchsorted(times, -obs_len) <= self.min_event_size:
-                        starts = []
-                        break
-                    starts.append(np.searchsorted(times, -obs_len))
-                if starts == []:
-                    {
-                        "hi_start": None,
-                        "fl_start": None,
-                    }
+                        return
+                    hi_start.append(np.searchsorted(times, -obs_len))
                 # To allocate list to cell
-                hi_start = [-event_length + i + hi_end for i in starts]
-                fl_start = [flatten_lens[i-1]+1 for i in starts]
+                fl_start = [flatten_lens[i-1]+1 for i in hi_start]
             else:
-                hi_start = hi_end - event_length
+                hi_start = 0
                 fl_start = 0
 
             hi_input = [
@@ -779,41 +757,21 @@ class EHR(object):
             fl_type = np.pad(fl_type, (0, self.max_patient_token_len - len(fl_type)), mode='constant')
             fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
             
-            hierarchical_data = np.memmap(
-                os.path.join(self.dest, f'{self.ehr_name}.hi.npy'),
-                dtype=np.int16,
-                mode='r+',
-                shape=(event_length, 3, self.max_event_token_len),
-                offset = (hi_end - event_length) * 3 * self.max_event_token_len * 2,
-            )
-            flatten_data = np.memmap(
-                os.path.join(self.dest, f'{self.ehr_name}.fl.npy'),
-                dtype=np.int16,
-                mode='r+',
-                shape=(1, 3, self.max_patient_token_len),
-                offset = fl_idx * 3 * self.max_patient_token_len * 2,
-            )
+            stay_g = ehr_g.create_group(str(stay_id))
+            stay_g.create_dataset('hi', data=np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16), dtype='i2')
+            stay_g.create_dataset('fl', data=np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16), dtype='i2')
+            stay_g.create_dataset('hi_start', data=hi_start, dtype='i')
+            stay_g.create_dataset('fl_start', data=fl_start, dtype='i')
 
-            # Save data into memmap format
-            hierarchical_data[:, :, :] = np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16)
+            return
 
-            flatten_data[0, :, :] = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16)
-
-            hierarchical_data.flush()
-            flatten_data.flush()
-            return {
-                "hi_start": hi_start,
-                "fl_start": fl_start,
-            }
-        # Do not need to pass whole cohorts df, only pass icustay_id, hi_end, fl_idx
-
-        indices = [encode_stay((encoded_events[row[self.icustay_key]], row["hi_end"], row["fl_idx"])) for _, row in tqdm(cohorts.iterrows())]
-        indices_df = pd.DataFrame(indices)
+        _encode_stay = lambda x: encode_stay(x, ehr_g)
+        Parallel(n_jobs=self.cfg.num_threads, prefer="threads")(delayed(_encode_stay)(i) for i in tqdm(encoded_events.items()))
         del encoded_events
-        cohorts = pd.concat([cohorts, indices_df], axis=1)
         if self.rolling_from_last:
-            cohorts = cohorts[cohorts['hi_start'].str.len()!=0]
-        # Should consider hadm_id for split
+            cohorts = cohorts[cohorts[self.icustay_key].isin([int(i) for i in ehr_g.keys()])]
+
+        # Should consider pat_id for split
         shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=self.seed)
         cum_len = shuffled.cumsum()
 
@@ -827,14 +785,22 @@ class EHR(object):
 
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
 
+        # Record corhots df to hdf5
+        for _, row in cohorts.iterrows():
+            group = ehr_g[str(row['stay_id'])]
+            for col in cohorts.columns:
+                if col in ["INTIME", "OUTTIME"]:
+                    continue
+                group.attrs[col] = row[col]
+        f.close()
         logger.info("Done encoding events.")
 
         return
 
     def run_pipeline(self) -> None:
-        cohorts = self.build_cohorts(cached=self.cache)
-        labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
-        cohorts, cohort_events = self.prepare_events(labeled_cohorts, cached=self.cache)
+        cohorts = self.build_cohorts(cached=False)
+        labeled_cohorts = self.prepare_tasks(cohorts, cached=False)
+        cohorts, cohort_events = self.prepare_events(labeled_cohorts, cached=False)
         encoded_events = self.encode_events(cohorts, cohort_events, cached=self.cache)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
