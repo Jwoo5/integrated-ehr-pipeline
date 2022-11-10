@@ -14,6 +14,7 @@ from transformers import AutoTokenizer
 from sortedcontainers import SortedList
 import h5py
 from joblib import Parallel, delayed
+from pandarallel import pandarallel
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,9 @@ class EHR(object):
 
         self.rolling_from_last = cfg.rolling_from_last
         assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
+
+        # NOTE: Using pandarallel is fast, but consume more memory.
+        pandarallel.initialize(nb_workers = cfg.num_threads//2 if cfg.num_threads>=4 else 1, progress_bar=True)
 
     @property
     def icustay_fname(self):
@@ -448,8 +452,8 @@ class EHR(object):
                 event_string = (cols, vals)
 
                 return (event[self.icustay_key], event[timestamp_key], table_name, event_string)
-    
-            linearized_events = Parallel(n_jobs=self.cfg.num_threads, prefer="threads")(delayed(linearize_event)(i) for _, i in tqdm(events.iterrows()))
+
+            linearized_events = events.parallel_apply(linearize_event, axis=1)
             
             [cohort_events[stay_id].add((i, j, k)) for stay_id, i, j, k in linearized_events]
 
