@@ -4,17 +4,20 @@ import re
 import shutil
 import subprocess
 import logging
-
-from typing import Union, List
+import pickle
+import h5py
 
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
+import pyspark.sql.functions as F
+
+from typing import Union, List
+from functools import reduce
+from itertools import chain
 from transformers import AutoTokenizer
-from sortedcontainers import SortedList
-import h5py
-from joblib import Parallel, delayed
-from pandarallel import pandarallel
+from tqdm import tqdm
+from pyspark.sql.types import StructType, StructField, ArrayType, IntegerType
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +83,10 @@ class EHR(object):
         self.special_tokens_dict = dict()
         self.max_special_tokens = 100
 
+        self.tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+        self.cls_token_id = self.tokenizer.cls_token_id
+        self.sep_token_id = self.tokenizer.sep_token_id
+
         self.table_type_id = 1
         self.column_type_id = 2
         self.value_type_id = 3
@@ -99,9 +106,6 @@ class EHR(object):
 
         self.rolling_from_last = cfg.rolling_from_last
         assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
-
-        # NOTE: Using pandarallel is fast, but consume more memory.
-        pandarallel.initialize(nb_workers = cfg.num_threads//2 if cfg.num_threads>=4 else 1, progress_bar=True)
 
     @property
     def icustay_fname(self):
@@ -325,21 +329,14 @@ class EHR(object):
 
         return labeled_cohorts
 
-    def prepare_events(self, cohorts, cached=False):
-        if cached:
-            cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx.dropped")
-            cohort_events = self.load_from_cache(self.ehr_name + ".events")
-            if (cohorts is not None) and (cohort_events is not None):
-                return cohorts, cohort_events
-            else:
-                raise RuntimeError()
 
-        logger.info(
-            "Start preparing medical events for each cohort."
-        )
+    def process_tables(self, cohorts, spark):
+        # in: cohorts, sparksession
+        # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
+        logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
+        cohorts = spark.createDataFrame(cohorts)
 
-        cohort_events = {id: SortedList() for id in cohorts[self.icustay_key].to_list()}
-
+        events_dfs = []
         for table in self.tables:
             fname = table["fname"]
             table_name = fname.split('/')[-1][: -len(self.ext)]
@@ -347,7 +344,6 @@ class EHR(object):
             excludes = table["exclude"]
             obs_size = self.obs_size
             gap_size = self.gap_size
-
             logger.info("{} in progress.".format(fname))
 
             code_to_descriptions = None
@@ -364,394 +360,204 @@ class EHR(object):
                 }
 
             infer_icustay_from_hadm_key = False
-            columns = pd.read_csv(
-                os.path.join(self.data_dir, fname), index_col=0, nrows=0
-            ).columns.to_list()
-            if self.icustay_key not in columns:
+
+            events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+            if self.icustay_key not in events.columns:
                 infer_icustay_from_hadm_key = True
-                if self.hadm_key not in columns:
+                if self.hadm_key not in events.columns:
                     raise AssertionError(
                         "{} doesn't have one of these columns: {}".format(
                             fname, [self.icustay_key, self.hadm_key]
                         )
                     )
-            # Parallelize this part
-            # Use pandarallel
-            events = pd.read_csv(
-                os.path.join(self.data_dir, fname)
-            )
-            events.drop(columns=excludes, inplace=True)
-            if infer_icustay_from_hadm_key:
-                events = events[events[self.hadm_key].isin(cohorts[self.hadm_key])]
-            else:
-                events = events[events[self.icustay_key].isin(cohorts[self.icustay_key])]
 
-            if table["timeoffsetunit"] == 'abs':
-                events[timestamp_key] = pd.to_datetime(
-                    events[timestamp_key], infer_datetime_format=True
-                )
+            events = events.drop(*excludes)
+            if table["timeoffsetunit"]=='abs':
+                events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
 
             if infer_icustay_from_hadm_key:
-                events = events.merge(
-                    cohorts[[self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"]],
-                    on=self.hadm_key,
-                    how="inner"
-                )
-                if table['timeoffsetunit'] == 'abs':
-                    events["TEMP_TIME"] = (events[timestamp_key] - events["INTIME"]).dt.total_seconds() // 60
-                    events = events[(events["TEMP_TIME"]>= 0) & (events["TEMP_TIME"]<=events["OUTTIME"])]
-                    events.drop(columns=["TEMP_TIME"], inplace=True)
-                    events = events[events[self.icustay_key].isin(cohorts[self.icustay_key])]
+                events = events.join(
+                        cohorts.select(self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"),
+                        on=self.hadm_key, how="inner"
+                    )
+                if table["timeoffsetunit"] =='abs':
+                    events = (
+                        events.withColumn(
+                            "TEMP_TIME",
+                            F.round((F.col(timestamp_key).cast("long") - F.col("INTIME").cast("long")) / 60)
+                        ).filter(F.col("TEMP_TIME") >= 0)
+                        .filter(F.col("TEMP_TIME")<=F.col("OUTTIME"))
+                        .drop("TEMP_TIME")
+                    )
                 else:
                     # All tables in eICU has icustay_key -> no need to handle
                     raise NotImplementedError()
+                events = events.join(cohorts.select(self.icustay_key), on=self.icustay_key, how='leftsemi')
 
             else:
-                events = events.merge(cohorts[[self.icustay_key, "INTIME", "OUTTIME"]], on=self.icustay_key, how="inner")
-            # Convert time compatible to relative minutes from intime
-            # Type timedelta
-            if table['timeoffsetunit'] =='abs':
-                events[timestamp_key] = (events[timestamp_key] - events["INTIME"]).dt.total_seconds() // 60
-            # Type int, relative minute from intime
-            # Outtime is also relative offset from intime
-            elif table['timeoffsetunit'] =='min':
-                pass
+                events = events.join(cohorts.select(self.icustay_key, "INTIME", "OUTTIME"), on=self.icustay_key, how="inner")
+
+            if table["timeoffsetunit"] == 'abs':
+                events = events.withColumn("TIME", F.round((F.col(timestamp_key).cast("long") - F.col("INTIME").cast("long")) / 60))
+                events = events.drop(timestamp_key)
+            elif table["timeoffsetunit"] == "min":
+                events = events.withColumnRenamed(timestamp_key, "TIME")
             else:
                 raise NotImplementedError()
-            
-            # which means that the event has been charted before / after the icustay
+
             if self.rolling_from_last:
-                events = events[(events[timestamp_key]>=0) & (events[timestamp_key]<=events['OUTTIME']-gap_size*60)]
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= F.col("OUTTIME") - gap_size * 60)
             else:
-                events = events[(events[timestamp_key]>=0) & (events[timestamp_key]<=obs_size*60)]
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
 
-            # Rearrange TIME to be relative to outtime (for rolling_from_last)
-            events[timestamp_key] = events[timestamp_key] - events['OUTTIME'] + gap_size * 60
-            
-            events.drop(columns=["INTIME", "OUTTIME", self.hadm_key], inplace=True, errors="ignore")
+            events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
 
-            def linearize_event(event):
-                cols = []
-                vals = []
-                for col, val in event.to_dict().items():
-                    if pd.isna(val) or col in [self.icustay_key, timestamp_key]:
-                        continue
-                    # convert code to description if applicable
-                    if (
-                        code_to_descriptions is not None
-                        and col in code_to_descriptions
-                    ):
-                        val = code_to_descriptions[col][val]
-                    if re.search(r"\d+\.\d+\.\d+", str(val)) or re.search(r"\d+\.\d+\.\d+", str(col)):
-                        logger.warn("val: {} col:{} has the irregular numeric format".format(val, col))
-                    val = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(val))
-                    col = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(col))
+            events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
-                    cols.append(col)
-                    vals.append(val)
-                event_string = (cols, vals)
+            if code_to_descriptions:
+                for col in code_to_descriptions.keys():
+                    mapping_expr = F.create_map([F.lit(x) for x in chain(*code_to_descriptions[col].items())])
+                    events = events.withColumn(col, mapping_expr[F.col(col)])
 
-                return (event[self.icustay_key], event[timestamp_key], table_name, event_string)
+            def process_unit(text, type_id):
+                # Given (table_name|col|val), generate ([inp], [type], [dpe])
+                text = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(text))
+                number_groups = [g for g in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", text)]
+                text = re.sub(r"([0-9\.])", r" \1 ", text)
+                input_ids = self.tokenizer.encode(text, add_special_tokens=False)
+                types = [type_id] * len(input_ids)
 
-            linearized_events = events.parallel_apply(linearize_event, axis=1)
-            
-            [cohort_events[stay_id].add((i, j, k)) for stay_id, i, j, k in linearized_events]
+                def get_dpe(tokens, number_groups):
+                    number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]
+                    numbers = [i for i, j in enumerate(tokens) if j in number_ids]
+                    numbers_cnt = 0
+                    data_dpe = [0] * len(tokens)
+                    for group in number_groups:
+                        if group[0] == "." * len(group[0]):
+                            numbers_cnt += len(group[0])
+                            continue
 
-        cohort_events = {
-            k: list(v) if len(v) <= self.max_event_size else list(v[-self.max_event_size:])
-            for k, v in cohort_events.items()
-            if len(v) >= self.min_event_size
-        }
-        skipped = len(cohorts) - len(cohort_events)
-        # Should remove skipped patients from cohort
-        cohorts = cohorts[cohorts[self.icustay_key].isin(cohort_events.keys())].reset_index(drop=True)
+                        start = numbers[numbers_cnt]
+                        end = numbers[numbers_cnt + len(group[0]) - 1] + 1
+                        corresponding_numbers = tokens[start:end]
+                        digits = [i for i, j in enumerate(corresponding_numbers) if j==119]
 
-        logger.info(
-            "Done preparing events for the given cohorts."
-            f" Skipped {skipped} cohorts since they have too few"
-            " (or no) corresponding medical events."
-        )
+                        # Case Integer
+                        if len(digits) == 0:
+                            data_dpe[start:end] = list(range(len(group[0]) + 5, 5, -1))
+                        # Case Float
+                        elif len(digits) == 1:
+                            digit_idx = len(group[0]) - digits[0]
+                            data_dpe[start:end] = list(
+                                range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
+                            )
+                        else:
+                            logger.warn(f"{data_dpe[start:end]} has irregular numerical formats")
 
-        self.save_to_cache(
-            cohorts, self.ehr_name + ".cohorts.labeled.dx.dropped", use_pickle=True
-        )
-        self.save_to_cache(
-            cohort_events, self.ehr_name + ".events", use_pickle=True
-        )
+                        numbers_cnt += len(group[0])
+                    return data_dpe
 
-        return cohorts, cohort_events
+                dpes = get_dpe(input_ids, number_groups)
+                return input_ids, types, dpes
 
-    def encode_events(self, cohorts, cohort_events, cached=False):
+            encoded_table_name = process_unit(table_name, self.table_type_id)
+            encoded_cols = {k: process_unit(k, self.column_type_id) for k in events.columns}
 
-        # save results with h5py format
-        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
-        ehr_g = f.create_group("ehr")
-        # save hyperparameters
-        for k, v in vars(self.cfg).items():
-            if v:
-                ehr_g.attrs[k] = v
-        
-        # Process Time Intervals
-        # XXX special tokens for the time interval (zero, last)
-        zero_time_interval = 0
-        last_time_interval = -1
-
-        collated_timestamps = {
-            icustay_id: [event[0] for event in events]
-            for icustay_id, events in cohort_events.items()
-        }
-        # calc time interval to the next event (i, i+1)
-        time_intervals = {
-            icustay_id: np.subtract(t[1:], t[:-1])
-            for icustay_id, t in collated_timestamps.items()
-        }
-        # exclude zero time intervals for quantizing
-        time_intervals_flattened = {
-            k: v[v != zero_time_interval] for k, v in time_intervals.items()
-        }
-        time_intervals_flattened = np.sort(
-            np.concatenate([v for v in time_intervals_flattened.values()])
-        )
-
-        # XXX append "special" time interval for the last event
-        time_intervals = {
-            k: np.append(v, last_time_interval) for k, v in time_intervals.items()
-        }
-
-        # XXX exclude +- 1%?
-        bins = np.arange(self.bins + 1)
-        bins = bins / bins[-1]
-        bins = np.quantile(time_intervals_flattened, bins)
-        with open(os.path.join(self.dest, self.ehr_name + "_time_gap_bins.tsv"), "w") as f:
-            for i, quantile in enumerate(bins):
-                print("{}\t{}".format(i, quantile), file=f)
-        logger.info("Time buckets: {}".format(bins))
-        
-        self.add_special_tokens(
-            ["[TIME_INT_ZERO]", "[TIME_INT_LAST]"]
-            + ["[TIME_INT_{}]".format(i) for i in range(1, len(bins))]
-        )
-
-        def _quantize(t: int):
-            if t == zero_time_interval:
-                return self.special_tokens_dict["[TIME_INT_ZERO]"]
-            elif t == last_time_interval:
-                return self.special_tokens_dict["[TIME_INT_LAST]"]
-            token_idx = np.searchsorted(bins[1:], t)+1
-            return self.special_tokens_dict["[TIME_INT_{}]".format(token_idx)]
-
-        time_intervals = {
-            k: map(_quantize, v) for k, v in time_intervals.items()
-        }
-
-        tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT", use_fast=True)
-        tokenizer.add_special_tokens({
-            "additional_special_tokens": list(self.special_tokens_dict.values())
-        })
-        cls_token_id = tokenizer.cls_token_id
-        sep_token_id = tokenizer.sep_token_id
-
-        # icustay_id: [(rel time, table name, events string, time token)...]
-        encoded_events = {
-            k: [
-                (*event, t_int)
-                for event, t_int in zip(v, time_intervals[k])
-            ]
-            for k, v in cohort_events.items()
-        }
-        logger.info("Finished time interval processing.")
-        del time_intervals_flattened
-        del time_intervals
-        del cohort_events
-        """
-        1) we can batch_encode list of table_names / list of event_strings / list of time_intervals
-        2) recover events: list of [tokenized(table_name), tokenized(event_string), [TIME_INT_{}]]
-            for zip(table_names, event_strings, time_intervals, ...)]
-        3) assign token type embeddings
-        4) assign digit place embeddings (only for event_string, otherwise 0)
-        4) flatten events: list of [tokenized(table_name, event_string), [TIME_INT_{}]] (token type embedding + dpe embedding)
-            4-1) (for flattened structure) flatten them: if flattened size > self.max_token_size,
-            4-2) calculate number of events for the corresponding icustay --> num_events
-            4-3) while i
-                4-3-1) get the next index where token type == "[TIME]"
-                4-3-2) if flattened_size - index <= self.max_token_size: break
-                        otherwise, loop
-            4-4) num_events -= i, flattened = flattened[-(flattened_size - index):], hier = hier[-(num_events):]
-        5) prepend [CLS], append [SEP] for each hierarchical event, for each flattened event
-        """
-        # Parallelize encoding
-        def encode_stay(input, ehr_g):
-            stay_id, events_per_icustay = input
-
-            times = [x[0] for x in events_per_icustay]
-            # make list of table names
-            table_names = [x[1] for x in events_per_icustay]
-            # tokenize table names
-            table_names_tokenized = tokenizer(table_names, add_special_tokens=False).input_ids
-            # generate the same shape list filled with self.table_type_id
-            table_type_tokens = [[self.table_type_id] * len(x) for x in table_names_tokenized]
-            table_dpe_tokens = [[self.others_dpe_id] * len(x) for x in table_names_tokenized]
-            # make list of events: (cols, vals)
-            event_strings = [x[2] for x in events_per_icustay] # list of (List[cols], List[vals])
-
-            # tokenize column names
-            # cols_tokenized: List[List[List[col_tokens]]]
-            #   e.g., cols_tokenized[event_i][col_j]: list of tokens of j-th column names of i-th event
-
-            cols, col_number_groups_list = zip(
-                *[self.split_and_get_number_groups(x[0]) for x in event_strings]
+            schema = StructType(
+                [
+                    StructField("INPUTS", ArrayType(IntegerType()), False),
+                    StructField("TYPES", ArrayType(IntegerType()), False),
+                    StructField("DPES", ArrayType(IntegerType()), False),
+                ]
             )
-            vals, val_number_groups_list = zip(
-                *[self.split_and_get_number_groups(x[1]) for x in event_strings]
+            def process_row(encoded_table_name, encoded_cols):
+                def _process_row(row):
+                    """
+                    input: row (cols: icustay_id, timestamp, ...)
+                    output: (input, type, dpe)
+                    """
+                    row = row.asDict()
+                    # Should INITIALIZE with blank arrays to prevent corruption in Pyspark... Why??
+                    input_ids, types, dpes = [], [], []
+                    input_ids += encoded_table_name[0]
+                    types += encoded_table_name[1]
+                    dpes += encoded_table_name[2]
+                    encoded_table_name
+                    for col, val in row.items():
+                        if col in [self.icustay_key, "TIME"] or val is None:
+                            continue
+                        encoded_col = encoded_cols[col]
+                        encoded_val = process_unit(val, self.value_type_id)
+                        if len(input_ids) + len(encoded_col[0]) + len(encoded_val[0]) + 2 <= self.max_event_token_len:
+                            input_ids += encoded_col[0] + encoded_val[0]
+                            types += encoded_col[1] + encoded_val[1]
+                            dpes += encoded_col[2] + encoded_val[2]
+                        else:
+                            break
+                    return input_ids, types, dpes
+                return F.udf(_process_row, returnType=schema)
+
+            events = (
+                events.withColumn("tmp", process_row(encoded_table_name, encoded_cols)(F.struct(*events.columns)))
+                    .withColumn("INPUTS", F.col("tmp.INPUTS"))
+                    .withColumn("TYPES", F.col("tmp.TYPES"))
+                    .withColumn("DPES", F.col("tmp.DPES"))
+                    .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
             )
+            events_dfs.append(events)
+        return reduce(lambda x, y: x.union(y), events_dfs)
 
-            cols_tokenized = [
-                tokenizer(x, add_special_tokens=False).input_ids for x in cols
-            ]
-            # generate the same shape list filled with self.column_type_id
-            column_type_tokens = [
-                [[self.column_type_id] * len(y) for y in x] for x in cols_tokenized
-            ]
-            column_dpe_tokens = self.get_dpe(cols_tokenized, col_number_groups_list)
 
-            # tokenize column values
-            # vals_tokenized: List[List[List[val_tokens]]]
-            #   e.g., vals_tokenized[event_i][col_j]: list of tokens of j-th column values of i-th event
-            vals_tokenized = [
-                tokenizer(x, add_special_tokens=False).input_ids for x in vals
-            ]
-            # generate the same shape list filled with self.value_type_id
-            value_type_tokens = [
-                [[self.value_type_id] * len(y) for y in x] for x in vals_tokenized
-            ]
-            value_dpe_tokens = self.get_dpe(vals_tokenized, val_number_groups_list)
-            # linearize column names & values as well as token types
-            # events_tokenized: List[List[tokens]]
-            #   e.g., events_tokenized[event_i]: list of tokens of i-th event such as
-            #       [col0, val0, col1, val1, ...]
-            # col_val_type_tokens: the same shape list with events_tokenized filled
-            #   with corresponding token type ids
-            events_tokenized = []
-            col_val_type_tokens = []
-            col_val_dpe_tokens = []
-            for (
-                cols, vals, col_type_tokens, val_type_tokens, col_dpe_tokens, val_dpe_tokens, table_name_tokenized
-            ) in zip(
-                cols_tokenized, vals_tokenized, column_type_tokens, value_type_tokens, column_dpe_tokens, value_dpe_tokens, table_names_tokenized
-            ):
-                event_tokenized = []
-                col_val_type_token = []
-                col_val_dpe_token = []
-                max_len = self.max_event_token_len - len(table_name_tokenized) - 3 # 3 for [CLS], [SEP], [TIME]
-                for (
-                    col, val, col_type_token, val_type_token, col_dpe_token, val_dpe_token,
-                ) in zip(
-                    cols, vals, col_type_tokens, val_type_tokens, col_dpe_tokens, val_dpe_tokens,
-                ):
-                    # Should stop when the length over max_event_token_len
-                    if len(event_tokenized) + len(col) + len(val) > max_len:
-                        break
-                    event_tokenized.extend(col + val)
-                    col_val_type_token.extend(col_type_token + val_type_token)
-                    col_val_dpe_token.extend(col_dpe_token + val_dpe_token)
-
-                events_tokenized.append(event_tokenized)
-                col_val_type_tokens.append(col_val_type_token)
-                col_val_dpe_tokens.append(col_val_dpe_token)
-
-            # make list of time intervals
-            time_intervals = [x[3] for x in events_per_icustay]
-            # tokenize time intervals
-            # this should yield a corresponding special token id for each time interval
-            time_intervals_tokenized = tokenizer(
-                time_intervals, add_special_tokens=False
-            ).input_ids
-            # generate the same shape list filled with self.timeint_type_id
-            timeint_type_tokens = [
-                [self.timeint_type_id] for _ in time_intervals_tokenized
-            ]
-            timeint_dpe_tokens = [[self.others_dpe_id] for _ in time_intervals_tokenized]
-
-            # encoded_events[icustay_id]: sequence of tokenized events [table_name, event_strings, time_interval]
-            #   List[List[tokens]], where encoded_events[icustay_id][i] is a sequence of input ids for i-th event of icustay_id
-            # token_type_embeddings[ocustay]: corresponding token type ids
-
-            # NOTE: [CLS] and [SEP] only added at first/end of flatten input, but [TIME] inserted between events
-            # Should retain recent events!
+    def make_input(self, cohorts, events, spark):
+        @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
+        def _make_input(events):
+            # Actually, this function does not have to return anything.
+            # However, return something(TIME) is required to satisfy the PySpark requirements.
+            df = events.sort_values("TIME")
             flatten_cut_idx = -1
-            flatten_lens = np.cumsum([len(i)+len(j)+1 for i,j in zip(table_names_tokenized, events_tokenized)])
-            event_length = len(table_names_tokenized)
-            if flatten_lens[-1] >self.max_patient_token_len-2:
-                flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+2)
+            # Consider SEP
+            flatten_lens = np.cumsum(df["INPUTS"].str.len()+1).values
+            event_length = len(df)
+
+            if flatten_lens[-1] > self.max_patient_token_len-1:
+                # Consider CLS token at first of the flatten input
+                flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+1)
                 flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[flatten_cut_idx+1:]
                 event_length = len(flatten_lens)
-                times = times[-event_length:]
+                df = df.iloc[-event_length:]
 
             if self.rolling_from_last:
                 # For icu len:
                 # Iteratively add hi_start and hi_end and time_len
                 # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
                 # Remove last n hours
-                max_obs_len = int(-((times[0] // (self.obs_size * 60)) * self.obs_size* 60))
+                max_obs_len = int(-((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size* 60))
                 hi_start = []
                 for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
-                    if np.searchsorted(times, -obs_len + self.obs_size * 60) -np.searchsorted(times, -obs_len) <= self.min_event_size:
-                        return
-                    hi_start.append(np.searchsorted(times, -obs_len))
+                    if np.searchsorted(df["TIME"].values, -obs_len + self.obs_size * 60) - np.searchsorted(df["TIME"].values, -obs_len) <= self.min_event_size:
+                        return events["TIME"].to_frame()
+                    hi_start.append(np.searchsorted(df["TIME"].values, -obs_len))
                 # To allocate list to cell
                 fl_start = [flatten_lens[i-1]+1 for i in hi_start]
             else:
+                if len(df)<=self.min_event_size:
+                    return events["TIME"].to_frame()
                 hi_start = 0
                 fl_start = 0
 
-            hi_input = [
-                [cls_token_id] + table_name + event + time_interval + [sep_token_id]
-                for event_idx, table_name, event, time_interval in zip(
-                    range(len(table_names_tokenized)),
-                    table_names_tokenized,
-                    events_tokenized,
-                    time_intervals_tokenized,
-                ) if event_idx > flatten_cut_idx
-            ]
-            hi_type = [
-                [self.cls_type_id] + table_type_token + col_val_type_token + timeint_type_token + [self.sep_type_id]
-                for event_idx, table_type_token, col_val_type_token, timeint_type_token in zip(
-                    range(len(table_names_tokenized)), table_type_tokens, col_val_type_tokens, timeint_type_tokens
-                ) if event_idx > flatten_cut_idx
-            ]
-            hi_dpe = [
-                [self.others_dpe_id] + table_dpe_token + col_val_dpe_token + timeint_dpe_token + [self.others_dpe_id]
-                for event_idx, table_dpe_token, col_val_dpe_token, timeint_dpe_token in zip(
-                    range(len(table_names_tokenized)), table_dpe_tokens, col_val_dpe_tokens, timeint_dpe_tokens
-                ) if event_idx > flatten_cut_idx                
-            ]
+            make_hi = lambda cls_id, sep_id, iterable: [[cls_id] + list(i) + [sep_id] for i in iterable]
+            make_fl = lambda cls_id, sep_id, iterable: [cls_id] + list(chain(*[list(i) + [sep_id] for i in iterable]))
             
-            fl_input = (
-                [cls_token_id]
-                + [j for i in [table_name + event + time_interval for event_idx, table_name, event, time_interval in zip(
-                        range(len(table_names_tokenized)), table_names_tokenized, events_tokenized, time_intervals_tokenized,
-                    ) if event_idx > flatten_cut_idx] for j in i]
-                + [sep_token_id]
-            )
+            hi_input = make_hi(self.cls_token_id, self.sep_token_id, df["INPUTS"])
+            hi_type = make_hi(self.cls_type_id, self.sep_type_id, df["TYPES"])
+            hi_dpe = make_hi(self.others_dpe_id, self.others_dpe_id, df["DPES"])
 
-            fl_type = (
-                [self.cls_type_id]
-                + [j for i in [table_type_token + col_val_type_token + timeint_type_token for event_idx, table_type_token, col_val_type_token, timeint_type_token in zip(
-                        range(len(table_names_tokenized)), table_type_tokens, col_val_type_tokens, timeint_type_tokens,
-                    ) if event_idx > flatten_cut_idx] for j in i]
-                + [self.sep_type_id]
-            )
+            fl_input = make_fl(self.cls_token_id, self.sep_token_id, df["INPUTS"])
+            fl_type = make_fl(self.cls_type_id, self.sep_type_id, df["TYPES"])
+            fl_dpe = make_fl(self.others_dpe_id, self.others_dpe_id, df["DPES"])
 
-            fl_dpe = (
-                [self.others_dpe_id]
-                + [j for i in [table_dpe_token + col_val_dpe_token + timeint_dpe_token for event_idx, table_dpe_token, col_val_dpe_token, timeint_dpe_token in zip(
-                        range(len(table_names_tokenized)), table_dpe_tokens, col_val_dpe_tokens, timeint_dpe_tokens,
-                    ) if event_idx > flatten_cut_idx] for j in i]
-                + [self.others_dpe_id]
-            )
-
-            assert all([len(i)<=self.max_event_token_len for i in hi_input])
-            assert len(fl_input) <= self.max_patient_token_len
+            assert all([len(i)<=self.max_event_token_len for i in hi_input]), hi_input
+            assert len(fl_input) <= self.max_patient_token_len, fl_input
 
             # Add padding to save as numpy array
             hi_input = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_input])
@@ -762,19 +568,48 @@ class EHR(object):
             fl_type = np.pad(fl_type, (0, self.max_patient_token_len - len(fl_type)), mode='constant')
             fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
             
+            stay_id = df[self.icustay_key].values[0]
+            # Create caches (cannot write to hdf5 directly with pyspark)
+            data = {
+                "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
+                "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
+                "hi_start": hi_start,
+                "fl_start": fl_start,
+                "time": df["TIME"].values,
+            }
+            with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
+                pickle.dump(data, f)
+            return events["TIME"].to_frame()
+
+        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+
+        events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
+
+        logger.info("Finish Data Preprocessing. Start to write to hdf5")
+
+        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
+        ehr_g = f.create_group("ehr")
+
+        active_stay_ids = []
+
+        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
+            stay_id = stay_id_file.split(".")[0]
+            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
+                data = pickle.load(f)
             stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset('hi', data=np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16), dtype='i2')
-            stay_g.create_dataset('fl', data=np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16), dtype='i2')
-            stay_g.create_dataset('hi_start', data=hi_start, dtype='i')
-            stay_g.create_dataset('fl_start', data=fl_start, dtype='i')
+            stay_g.create_dataset('hi', data=data['hi'], dtype='i2')
+            stay_g.create_dataset('fl', data=data['fl'], dtype='i2')
+            stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
+            stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
+            stay_g.create_dataset('time', data = data['time'], dtype='i')
+            active_stay_ids.append(int(stay_id))
 
-            return
+        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # Drop patients with few events
 
-        _encode_stay = lambda x: encode_stay(x, ehr_g)
-        Parallel(n_jobs=self.cfg.num_threads, prefer="threads")(delayed(_encode_stay)(i) for i in tqdm(encoded_events.items()))
-        del encoded_events
-        if self.rolling_from_last:
-            cohorts = cohorts[cohorts[self.icustay_key].isin([int(i) for i in ehr_g.keys()])]
+        logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
+        cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
 
         # Should consider pat_id for split
         shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=self.seed)
@@ -794,7 +629,7 @@ class EHR(object):
         for _, row in cohorts.iterrows():
             group = ehr_g[str(row[self.icustay_key])]
             for col in cohorts.columns:
-                if col in ["INTIME", "OUTTIME"]:
+                if col in ["INTIME", "OUTTIME"] or isinstance(row[col], (pd.Timestamp, pd.Timedelta)):
                     continue
                 group.attrs[col] = row[col]
         f.close()
@@ -802,11 +637,11 @@ class EHR(object):
 
         return
 
-    def run_pipeline(self) -> None:
+    def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
-        cohorts, cohort_events = self.prepare_events(labeled_cohorts, cached=self.cache)
-        encoded_events = self.encode_events(cohorts, cohort_events, cached=self.cache)
+        events = self.process_tables(labeled_cohorts, spark)
+        self.make_input(cohorts, events, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
@@ -935,76 +770,3 @@ class EHR(object):
                 "-P", dest,
             ]
         )
-
-    def split_and_get_number_groups(self, row):
-        """
-        input:
-            row: List[str], columns or values of an event
-        output:
-            splitteds: List[str]
-            number_groups_list: List[List[int]]
-        """
-        splitted_list = []
-        number_groups_list = []
-
-        for data in row:
-            # Use regex to find all int/floats in the string
-            number_groups = [
-                group
-                for group in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", data)
-            ]
-            number_groups_list.append(number_groups)
-            splitted_list.append(re.sub(r"([0-9\.])", r" \1 ", data))
-
-        return splitted_list, number_groups_list
-
-
-    # Case 1. '2 5', '25'
-    # Case 2. Too long number
-    def get_dpe(self, data_tokenized, data_number_groups_list) -> list:
-        """
-        input:
-            data_tokenized: List[List[List[int]]]
-            data_number_groups_list: List[List[List[int]]]
-        output:
-            dpe: List[List[List[int]]]
-        cf. numerical values are already rounded into 4 digits
-        Not Digit/Padding -> 0
-        if original string is '1111.1111 aaa'-> '987654321 000'
-        """
-        number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]  # [0-9\.]
-        dpes = []
-        for event_id, number_groups_list in zip(
-            data_tokenized, data_number_groups_list
-        ):
-            event_dpes = []
-            for data_id, number_groups in zip(event_id, number_groups_list):
-                numbers = [i for i, j in enumerate(data_id) if j in number_ids]
-                numbers_cnt = 0
-                data_dpe = [0] * len(data_id)
-                for group in number_groups:
-                    if group[0] == "." * len(group[0]):
-                        numbers_cnt += len(group[0])
-                        continue
-
-                    start = numbers[numbers_cnt]
-                    end = numbers[numbers_cnt + len(group[0]) - 1] + 1
-                    corresponding_numbers = data_id[start:end]
-                    digits = [i for i, j in enumerate(corresponding_numbers) if j==119]
-
-                    # Case Integer
-                    if len(digits) == 0:
-                        data_dpe[start:end] = list(range(len(group[0]) + 5, 5, -1))
-                    # Case Float
-                    elif len(digits) == 1:
-                        digit_idx = len(group[0]) - digits[0]
-                        data_dpe[start:end] = list(
-                            range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
-                        )
-                    else:
-                        logger.warn(f"{data_dpe[start:end]} has irregular numerical formats")
-
-                    numbers_cnt += len(group[0])
-                event_dpes.append(data_dpe)
-            dpes.append(event_dpes)
-        return dpes

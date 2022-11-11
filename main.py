@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import argparse
+from pyspark.sql import SparkSession
 
 from ehrs import EHR_REGISTRY
 
@@ -151,7 +152,15 @@ def main(args):
         os.makedirs(args.dest)
 
     ehr = EHR_REGISTRY[args.ehr](args)
-    ehr.run_pipeline()
+    spark = (
+        SparkSession.builder.master(f"local[{args.num_threads}]")
+        .config("spark.driver.memory", "100g")
+        .config("spark.driver.maxResultSize", "10g")
+        .config("spark.network.timeout", "100s")
+        .appName("Main_Preprocess")
+        .getOrCreate()
+    )
+    ehr.run_pipeline(spark)
 
 if __name__ == "__main__":
     parser = get_parser()
