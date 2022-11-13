@@ -641,7 +641,7 @@ class EHR(object):
         cohorts = self.build_cohorts(cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
         events = self.process_tables(labeled_cohorts, spark)
-        self.make_input(cohorts, events, spark)
+        self.make_input(labeled_cohorts, events, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
