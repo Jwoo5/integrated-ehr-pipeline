@@ -50,8 +50,14 @@ class EHR(object):
         self.min_event_size = (
             cfg.min_event_size if cfg.min_event_size is not None else 1
         )
+        self.min_ds_event_size = (
+            cfg.min_ds_event_size if cfg.min_ds_event_size is not None else 1
+        )
         assert self.min_event_size > 0, (
             "--min_event_size could not be negative or zero", self.min_event_size
+        )
+        assert self.min_ds_event_size > 0, (
+            "--min_ds_event_size could not be negative or zero", self.min_ds_event_size,
         )
         assert self.min_event_size <= self.max_event_size, (
             self.min_event_size,
@@ -105,6 +111,7 @@ class EHR(object):
         self._hadm_key = None
 
         self.rolling_from_last = cfg.rolling_from_last
+        self.data_sampling = cfg.data_sampling
         assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
 
     @property
@@ -407,10 +414,9 @@ class EHR(object):
 
             if self.rolling_from_last:
                 events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= F.col("OUTTIME") - gap_size * 60)
-            else:
+                events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
+            elif not self.data_sampling:
                 events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
-
-            events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
@@ -524,7 +530,10 @@ class EHR(object):
                 flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+1)
                 flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[flatten_cut_idx+1:]
                 event_length = len(flatten_lens)
-                df = df.iloc[-event_length:]
+            
+            # Event length should not be longer than max_event_size
+            event_length = min(event_length, self.max_event_size)
+            df = df.iloc[-event_length:]
 
             if self.rolling_from_last:
                 # For icu len:
@@ -556,6 +565,7 @@ class EHR(object):
             fl_type = make_fl(self.cls_type_id, self.sep_type_id, df["TYPES"])
             fl_dpe = make_fl(self.others_dpe_id, self.others_dpe_id, df["DPES"])
 
+            assert len(hi_input) <= self.max_event_size, hi_input
             assert all([len(i)<=self.max_event_token_len for i in hi_input]), hi_input
             assert len(fl_input) <= self.max_patient_token_len, fl_input
 
