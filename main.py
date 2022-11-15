@@ -185,6 +185,19 @@ def get_parser():
     )
 
     parser.add_argument(
+        '--data_sampling', action='store_true',
+        help='whether to perform data sampling or not'
+    )
+    parser.add_argument(
+        '--ds_seed', type=int, default=10,
+        help='random seed for data sampling'
+    )
+    parser.add_argument(
+        '--ds_overlap', type=int, default=5,
+        help="overlap size for data sampling"
+    )
+
+    parser.add_argument(
         '--num_threads', type=int, default=8, help='number of threads to use'
     )
     return parser
