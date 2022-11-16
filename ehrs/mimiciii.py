@@ -155,7 +155,7 @@ class MIMICIII(EHR):
 
         labeled_cohorts.dropna(subset=["ICD9_CODE"], inplace=True)
         labeled_cohorts["diagnosis"] = labeled_cohorts["ICD9_CODE"].map(
-            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
+            lambda dxs: list(set([int(lvl1[dx])-1 for dx in dxs if dx in lvl1]))
         )
         labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
         labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
