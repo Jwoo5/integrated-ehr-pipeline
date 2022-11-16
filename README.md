@@ -2,8 +2,9 @@
 - Pre-processing code refining project in [UniHPF](https://arxiv.org/abs/2207.09858)
 
 ## Install Requirements
+- NOTE: This repository requires `python>=3.9` and `Java>=8`
 ```
-pip install numpy pandas sortedcontainers tqdm treelib transformers
+pip install numpy pandas sortedcontainers tqdm treelib transformers pyspark
 ```
 ## How to Use
 ```
