@@ -120,7 +120,7 @@ class eICU(EHR):
         dx = (
             dx[[self.icustay_key, "diagnosis"]]
             .groupby(self.icustay_key)
-            .agg(list)
+            .agg(lambda x: list(set(x)))
             .reset_index()
         )
         labeled_cohorts = labeled_cohorts.merge(dx, on=self.icustay_key, how="left")
