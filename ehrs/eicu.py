@@ -83,57 +83,6 @@ class eICU(EHR):
                 "exclude": ["infusiondrugid"],
             },
         ]
-        if cfg.use_more_tables:
-            self.tables += [
-            {
-                "fname": "nurseCharting" + self.ext,
-                "timestamp": "nursingchartoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["nursingchartentryoffset", "nursingchartid"],
-            },
-                {
-                "fname": "nurseCare" + self.ext,
-                "timestamp": "nursecareoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["nursecareentryoffset", "nursecareid"],
-            },
-            {
-                "fname": "intakeOutput" + self.ext,
-                "timestamp": "intakeoutputoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["intakeoutputentryoffset", "intakeoutputid"],
-            },
-            {
-                "fname": "microLab" + self.ext,
-                "timestamp": "culturetakenoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["microlabid"],
-            },
-            {
-                "fname": "nurseAssessment" + self.ext,
-                "timestamp": "nurseassessoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["nurseassessentryoffset", "nurseassessid"],
-            },
-            {
-                "fname": "treatment" + self.ext,
-                "timestamp": "treatmentoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["treatmentid", "activeupondischarge"],
-            },
-            {
-                "fname": "vitalAperiodic" + self.ext,
-                "timestamp": "observationoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["vitalaperiodicid"],
-            },
-            {
-                "fname": "vitalPeriodic" + self.ext,
-                "timestamp": "observationoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["vitalperiodicid"],
-            },
-        ]
 
         self._icustay_key = "patientunitstayid"
         self._hadm_key = "patienthealthsystemstayid"

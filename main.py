@@ -89,12 +89,6 @@ def get_parser():
         help="min event size to skip small samples",
     )
     parser.add_argument(
-        "--min_ds_event_size",
-        type=int,
-        default=50,
-        help="min event size to skip small samples for data sampling task"
-    )
-    parser.add_argument(
         "--min_age", type=int, default=18, help="min age to skip too young patients"
     )
     parser.add_argument(
@@ -133,21 +127,6 @@ def get_parser():
     parser.add_argument(
         '--max_patient_token_len', type=int, default=8192,
         help='max token length for each patient (Flatten)'
-    )
-
-    parser.add_argument(
-        '--rolling_from_last', action='store_true',
-        help='whether to start from the last event or not. If true, then observe last (obs_size, obs_size*2, ...) hours before (time_gap) from discharge'
-    )
-
-    parser.add_argument(
-        '--data_sampling', action='store_true',
-        help='whether to perform data sampling or not'
-    )
-
-    parser.add_argument(
-        '--use_more_tables', action='store_true',
-        help='Use more tables including chartevents, Not supported on MIMIC-III'
     )
 
     parser.add_argument(

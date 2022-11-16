@@ -105,68 +105,6 @@ class MIMICIV(EHR):
             },
         ]
 
-        if cfg.use_more_tables:
-            self.tables+=[
-                {
-                    "fname": "icu/chartevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "storetime",
-                        "subject_id",
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                },
-                {
-                    "fname": "icu/outputevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "storetime",
-                        "subject_id",
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                },
-                {
-                    "fname": "hosp/microbiologyevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "chartdate",
-                        "storetime",
-                        "storedate",
-                        "subject_id",
-                        "microevent_id",
-                        "micro_specimen_id",
-                        "spec_itemid",
-                        "test_itemid",
-                        "org_itemid",
-                        "ab_itemid"
-                    ],
-                },
-                {
-                    "fname": "icu/procedureevents" + self.ext,
-                    "timestamp": "starttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "storetime",
-                        "endtime",
-                        "subject_id",
-                        "orderid",
-                        "linkorderid",
-                        "continueinnextdept",
-                        "statusdescription"
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                },
-            ]
-
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"

@@ -50,14 +50,8 @@ class EHR(object):
         self.min_event_size = (
             cfg.min_event_size if cfg.min_event_size is not None else 1
         )
-        self.min_ds_event_size = (
-            cfg.min_ds_event_size if cfg.min_ds_event_size is not None else 1
-        )
         assert self.min_event_size > 0, (
             "--min_event_size could not be negative or zero", self.min_event_size
-        )
-        assert self.min_ds_event_size > 0, (
-            "--min_ds_event_size could not be negative or zero", self.min_ds_event_size,
         )
         assert self.min_event_size <= self.max_event_size, (
             self.min_event_size,
@@ -110,9 +104,6 @@ class EHR(object):
         self._icustay_key = None
         self._hadm_key = None
 
-        self.rolling_from_last = cfg.rolling_from_last
-        self.data_sampling = cfg.data_sampling
-        assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
 
     @property
     def icustay_fname(self):
@@ -222,38 +213,23 @@ class EHR(object):
             "HOS_DISCHARGE_LOCATION",
         ]].copy()
 
-        # los prediction
-        if not self.rolling_from_last:
-            labeled_cohorts["los_3day"] = (cohorts["LOS"] > 3).astype(int)
-            labeled_cohorts["los_7day"] = (cohorts["LOS"] > 7).astype(int)
-
         # mortality prediction
         # if the discharge location of an icustay is 'Death'
         #   & intime + obs_size + gap_size <= dischtime <= intime + obs_size + pred_size
         # it is assigned positive label on the mortality prediction
-        if self.rolling_from_last:
-            labeled_cohorts["mortality"] = (
-                (
-                (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
+
+        labeled_cohorts["mortality"] = (
+            (
+                (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
                 | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                )
-                & (
-                    labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60 - self.gap_size * 60
-                )
-            ).astype(int)
-        else:
-            labeled_cohorts["mortality"] = (
-                (
-                    (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
-                    | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                )
-                & (
-                    self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
-                )
-                & (
-                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60
-                )
-            ).astype(int)
+            )
+            & (
+                self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+            )
+            & (
+                labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60
+            )
+        ).astype(int)
         # if the discharge of 'Death' occurs in icu or hospital
         # we retain these cases for the imminent discharge task
         labeled_cohorts["IN_HOSPITAL_MORTALITY"] = (
@@ -283,18 +259,13 @@ class EHR(object):
 
 
         # define imminent discharge prediction task
-        if self.rolling_from_last:
-            is_discharged = (
-                labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60 - self.gap_size * 60
+        is_discharged = (
+            (
+                self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
             )
-        else:
-            is_discharged = (
-                (
-                    self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
-                )
-                & (
-                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
-            )
+            & (
+                labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
+        )
         labeled_cohorts.loc[is_discharged, "imminent_discharge"] = labeled_cohorts.loc[
             is_discharged, "HOS_DISCHARGE_LOCATION"
         ]
@@ -412,11 +383,7 @@ class EHR(object):
             else:
                 raise NotImplementedError()
 
-            if self.rolling_from_last:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= F.col("OUTTIME") - gap_size * 60)
-                events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
-            elif not self.data_sampling:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
+            events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
@@ -535,24 +502,8 @@ class EHR(object):
             event_length = min(event_length, self.max_event_size)
             df = df.iloc[-event_length:]
 
-            if self.rolling_from_last:
-                # For icu len:
-                # Iteratively add hi_start and hi_end and time_len
-                # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
-                # Remove last n hours
-                max_obs_len = int(-((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size* 60))
-                hi_start = []
-                for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
-                    if np.searchsorted(df["TIME"].values, -obs_len + self.obs_size * 60) - np.searchsorted(df["TIME"].values, -obs_len) <= self.min_event_size:
-                        return events["TIME"].to_frame()
-                    hi_start.append(np.searchsorted(df["TIME"].values, -obs_len))
-                # To allocate list to cell
-                fl_start = [flatten_lens[i-1]+1 for i in hi_start]
-            else:
-                if len(df)<=self.min_event_size:
-                    return events["TIME"].to_frame()
-                hi_start = 0
-                fl_start = 0
+            if len(df)<=self.min_event_size:
+                return events["TIME"].to_frame()
 
             make_hi = lambda cls_id, sep_id, iterable: [[cls_id] + list(i) + [sep_id] for i in iterable]
             make_fl = lambda cls_id, sep_id, iterable: [cls_id] + list(chain(*[list(i) + [sep_id] for i in iterable]))
@@ -583,8 +534,6 @@ class EHR(object):
             data = {
                 "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
                 "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
-                "hi_start": hi_start,
-                "fl_start": fl_start,
                 "time": df["TIME"].values,
             }
             with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
@@ -610,8 +559,6 @@ class EHR(object):
             stay_g = ehr_g.create_group(str(stay_id))
             stay_g.create_dataset('hi', data=data['hi'], dtype='i2')
             stay_g.create_dataset('fl', data=data['fl'], dtype='i2')
-            stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
-            stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
             stay_g.create_dataset('time', data = data['time'], dtype='i')
             active_stay_ids.append(int(stay_id))
 
