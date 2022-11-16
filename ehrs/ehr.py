@@ -557,8 +557,8 @@ class EHR(object):
             with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
                 data = pickle.load(f)
             stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset('hi', data=data['hi'], dtype='i2')
-            stay_g.create_dataset('fl', data=data['fl'], dtype='i2')
+            stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
+            stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
             stay_g.create_dataset('time', data = data['time'], dtype='i')
             active_stay_ids.append(int(stay_id))
 
