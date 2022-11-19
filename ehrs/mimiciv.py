@@ -130,37 +130,38 @@ class MIMICIV(EHR):
 
         labeled_cohorts = super().prepare_tasks(cohorts, cached)
 
-        logger.info(
-            "Start labeling cohorts for diagnosis prediction."
-        )
+        if self.diagnosis:
+            logger.info(
+                "Start labeling cohorts for diagnosis prediction."
+            )
 
-        # define diagnosis prediction task
-        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+            # define diagnosis prediction task
+            diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
 
-        diagnoses = self.icd10toicd9(diagnoses)
+            diagnoses = self.icd10toicd9(diagnoses)
 
-        ccs_dx = pd.read_csv(self.ccs_path)
-        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
-        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1].astype(int) - 1
-        lvl1 = {
-            x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
-        }
+            ccs_dx = pd.read_csv(self.ccs_path)
+            ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
+            ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1].astype(int) - 1
+            lvl1 = {
+                x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+            }
 
-        diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
+            diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
 
-        diagnoses = diagnoses[diagnoses['diagnosis'].notnull() & diagnoses['diagnosis']!=14]
-        diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
-        diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
+            diagnoses = diagnoses[diagnoses['diagnosis'].notnull() & diagnoses['diagnosis']!=14]
+            diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
+            diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
 
-        labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
+            labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
-        # Some of patients(21) does not have dx codes
-        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+            # Some of patients(21) does not have dx codes
+            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
-        self.labeled_cohorts = labeled_cohorts
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+            self.labeled_cohorts = labeled_cohorts
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
 
-        logger.info("Done preparing diagnosis prediction for the given cohorts")
+            logger.info("Done preparing diagnosis prediction for the given cohorts")
 
         return labeled_cohorts
 
