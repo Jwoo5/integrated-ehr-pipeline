@@ -216,64 +216,6 @@ class MIMICIII(EHR):
 
         return labeled_cohorts
 
-    def clinical_task(self, cohorts, task, spark):
-
-        cohorts = spark.createDataFrame(cohorts)
-        fname = self.task_itemids[task]["fname"]
-        timestamp = self.task_itemids[task]["timestamp"]
-        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
-        excludes = self.task_itemids[task]["exclude"]
-        code = self.task_itemids[task]["code"][0]
-        value = self.task_itemids[task]["value"][0]
-        itemid = self.task_itemids[task]["itemid"][0]
-
-        table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
-        table = table.drop(*excludes)
-        table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
-
-        merge = cohorts.join(table, on="HADM_ID", how="inner")
-        if timeoffsetunit == "abs":
-            merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
-            merge = (
-                merge.withColumn(
-                    timestamp,
-                    F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
-                )
-            )
-
-        # Events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
-        merge = merge.filter(
-            ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
-                ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
-                    F.col("OUTTIME") >= F.col(timestamp)
-            )
-
-        # Average value of events
-        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
-
-        # Labeling
-        if task == 'bilirubin':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 1.2, 0).when(
-                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
-                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2).when(
-                            (value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3).when(
-                                value_agg.avg_value >= 12.0, 4)
-                )
-        elif task == 'platelets':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value >= 150, 0).when(
-                    (value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1).when(
-                        (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
-                            (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
-                                value_agg.avg_value < 20, 4)
-                )
-
-        cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
-        cohorts = cohorts.na.fill(value=5, subset=[task])
-
-        return cohorts.toPandas()
-
 
     def make_compatible(self, icustays):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
@@ -339,7 +281,65 @@ class MIMICIII(EHR):
         return icustays
 
 
-    
+    def clinical_task(self, cohorts, task, spark):
+
+        cohorts = spark.createDataFrame(cohorts)
+        fname = self.task_itemids[task]["fname"]
+        timestamp = self.task_itemids[task]["timestamp"]
+        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
+        excludes = self.task_itemids[task]["exclude"]
+        code = self.task_itemids[task]["code"][0]
+        value = self.task_itemids[task]["value"][0]
+        itemid = self.task_itemids[task]["itemid"][0]
+
+        table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+        table = table.drop(*excludes)
+        table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
+
+        merge = cohorts.join(table, on=self.hadm_key, how="inner")
+        if timeoffsetunit == "abs":
+            merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
+            merge = (
+                merge.withColumn(
+                    timestamp,
+                    F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
+                )
+            )
+
+        # Events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
+        merge = merge.filter(
+            ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
+                ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
+                    F.col("OUTTIME") >= F.col(timestamp)
+            )
+
+        # Average value of events
+        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+
+        # Labeling
+        if task == 'bilirubin':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2).when(
+                            (value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3).when(
+                                value_agg.avg_value >= 12.0, 4)
+                )
+        elif task == 'platelets':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value >= 150, 0).when(
+                    (value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1).when(
+                        (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
+                            (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
+                                value_agg.avg_value < 20, 4)
+                )
+
+        cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
+        cohorts = cohorts.na.fill(value=5, subset=[task])
+
+        return cohorts
+
+
     def infer_data_extension(self) -> str:
         if (len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 26):
             ext = ".csv.gz"
