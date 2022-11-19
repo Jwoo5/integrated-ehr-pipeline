@@ -105,6 +105,46 @@ class MIMICIV(EHR):
             },
         ]
 
+        if self.creatinine or self.bilirubin or self.platelets:
+            self.task_itemids = {
+                "creatinine": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "VALUEUOM", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [50912]
+                },
+                "bilirubin": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "VALUEUOM", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [50885]
+                },
+                "platelets": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "VALUEUOM", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [51265]
+                },
+                "dialysis": {
+                    "ce": [226118, 227357, 225725, 226499, 224154, 225810, 227639, 225183, 227438, 224191, 225806, 225807, \
+                        228004, 228005, 228006, 224144, 224145, 224149, 224150, 224151, 224152, 224153, 224404, 224406, 226457, 225959, \
+                        224135, 224139, 224146, 225323, 225740, 225776, 225951, 225952, 225953, 225954, 225956, 225958, 225961, 225963, \
+                        225965, 225976, 225977, 227124, 227290, 227638, 227640, 227753], 
+                    "oe": [40386],
+                    "ie": [227536, 227525],
+                    "pe": [225441, 225802, 225803, 225805, 224270, 225809, 225955, 225436]
+                }
+            }
+
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
@@ -121,14 +161,14 @@ class MIMICIV(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+        labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         if self.diagnosis:
             logger.info(

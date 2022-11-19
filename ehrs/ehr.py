@@ -206,7 +206,7 @@ class EHR(object):
         return icustays
 
     # TODO process specific tasks according to user choice?
-    def prepare_tasks(self, cohorts, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
@@ -587,8 +587,8 @@ class EHR(object):
                 pickle.dump(data, f)
             return events["TIME"].to_frame()
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
 
         events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
 
@@ -609,7 +609,7 @@ class EHR(object):
             stay_g.create_dataset('time', data = data['time'], dtype='i')
             active_stay_ids.append(int(stay_id))
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         # Drop patients with few events
 
         logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
@@ -643,7 +643,7 @@ class EHR(object):
 
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
-        labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
+        labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
         events = self.process_tables(labeled_cohorts, spark)
         self.make_input(labeled_cohorts, events, spark)
 
