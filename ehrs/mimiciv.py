@@ -142,14 +142,14 @@ class MIMICIV(EHR):
 
             ccs_dx = pd.read_csv(self.ccs_path)
             ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
-            ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1].astype(int) - 1
+            ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
             lvl1 = {
                 x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
             }
 
             diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
 
-            diagnoses = diagnoses[diagnoses['diagnosis'].notnull() & diagnoses['diagnosis']!=14]
+            diagnoses = diagnoses[(diagnoses['diagnosis'].notnull()) & (diagnoses['diagnosis']!=14)]
             diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
             diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
 

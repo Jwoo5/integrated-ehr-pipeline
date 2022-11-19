@@ -147,7 +147,7 @@ class MIMICIII(EHR):
             }
             diagnoses['diagnosis'] = diagnoses['ICD9_CODE'].map(lvl1)
 
-            diagnoses = diagnoses[diagnoses['diagnosis'].notnull() & diagnoses['diagnosis']!=14]
+            diagnoses = diagnoses[(diagnoses['diagnosis'].notnull()) & (diagnoses['diagnosis']!=14)]
             diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
             diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
