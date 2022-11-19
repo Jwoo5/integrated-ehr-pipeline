@@ -201,33 +201,22 @@ class MIMICIV(EHR):
 
         diagnoses = self.icd10toicd9(diagnoses)
 
-        diagnoses_with_cohorts = diagnoses[
-            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
-        ]
-        diagnoses_with_cohorts = (
-            diagnoses_with_cohorts.groupby(self.hadm_key)["icd_code_converted"]
-            .apply(list)
-            .to_frame()
-        )
-        labeled_cohorts = labeled_cohorts.join(
-            diagnoses_with_cohorts, on=self.hadm_key, how="left"
-        )
-
         ccs_dx = pd.read_csv(self.ccs_path)
         ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
         ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1].astype(int) - 1
         lvl1 = {
-            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+            x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
         }
 
+        diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
+
+        diagnoses = diagnoses[diagnoses['diagnosis'].notnull() & diagnoses['diagnosis']!=14]
+        diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
+        diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
+
+        labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
+
         # Some of patients(21) does not have dx codes
-        labeled_cohorts.dropna(subset=["icd_code_converted"], inplace=True)
-
-        labeled_cohorts["diagnosis"] = labeled_cohorts["icd_code_converted"].map(
-            lambda dxs: list(set([lvl1[dx] for dx in dxs if dx in lvl1]))
-        )
-
-        labeled_cohorts = labeled_cohorts.drop(columns=["icd_code_converted"])
         labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
         self.labeled_cohorts = labeled_cohorts

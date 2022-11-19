@@ -138,25 +138,19 @@ class MIMICIII(EHR):
         # define diagnosis prediction task
         diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
 
-        diagnoses_with_cohorts = diagnoses[
-            diagnoses[self.hadm_key].isin(labeled_cohorts[self.hadm_key])
-        ]
-        diagnoses_with_cohorts = (
-            diagnoses_with_cohorts.groupby(self.hadm_key)["ICD9_CODE"].apply(list).to_frame()
-        )
-        labeled_cohorts = labeled_cohorts.join(diagnoses_with_cohorts, on="HADM_ID")
-
         ccs_dx = pd.read_csv(self.ccs_path)
         ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
         ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
         lvl1 = {
-            x: y for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+            x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
         }
+        diagnoses['diagnosis'] = diagnoses['ICD9_CODE'].map(lvl1)
 
-        labeled_cohorts.dropna(subset=["ICD9_CODE"], inplace=True)
-        labeled_cohorts["diagnosis"] = labeled_cohorts["ICD9_CODE"].map(
-            lambda dxs: list(set([int(lvl1[dx])-1 for dx in dxs if dx in lvl1]))
-        )
+        diagnoses = diagnoses[diagnoses['diagnosis'].notnull() & diagnoses['diagnosis']!=14]
+        diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
+        diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
+        labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
+
         labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
         labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
 

@@ -166,15 +166,17 @@ class eICU(EHR):
 
         str2cat = self.make_dx_mapping()
         dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+        dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
         dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
-        dx = dx[dx["diagnosis"] != -1]
+        # Ignore Rare Class(14)
+        dx = dx[(dx["diagnosis"] != -1) & (dx["diagnosis"] != 14)]
+        dx.loc[dx['diagnosis']>=14, "diagnosis"] -= 1
         dx = (
-            dx[[self.icustay_key, "diagnosis"]]
-            .groupby(self.icustay_key)
+            dx.groupby(self.hadm_key)['diagnosis']
             .agg(lambda x: list(set(x)))
-            .reset_index()
+            .to_frame()
         )
-        labeled_cohorts = labeled_cohorts.merge(dx, on=self.icustay_key, how="left")
+        labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
         labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
         self.labeled_cohorts = labeled_cohorts
