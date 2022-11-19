@@ -4,6 +4,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import glob
+import pyspark.sql.functions as F
+import pyspark.sql.types as T
 
 from ehrs import register_ehr, EHR
 
@@ -107,6 +109,52 @@ class MIMICIII(EHR):
                 "desc_key": ["LABEL"],
             },
         ]
+
+        if self.creatinine or self.bilirubin or self.platelets:
+            self.task_itemids = {
+                "creatinine": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "VALUEUOM", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [50912]
+                },
+                "bilirubin": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "VALUEUOM", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [50885]
+                },
+                "platelets": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "VALUEUOM", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [51265]
+                },
+                "dialysis": {
+                    "cv_ce": [152,148,149,146,147,151,150,7949,229,235,241,247,253,259,265,271,582,466,917,927,6250], 
+                    "cv_ie": [40788, 40907, 41063, 41147, 41307, 41460, 41620, 41711, 41791, 41792, 42562, 43829, 44037, 44188, 44526, 44527, \
+                        44584, 44591, 44698, 44927, 44954, 45157, 45268, 45352, 45353, 46012, 46013, 46172, 46173, 46250, 46262, 46292, 46293, 46311, 46389, 46574, 46681, 46720, 46769, 46773],
+                    "cv_oe": [40386, 40425, 40426, 40507, 40613, 40624, 40690, 40745, 40789, 40881, 40910, 41016, 41034, 41069, 41112, 41250, 41374, 41417, 41500, 41527, \
+                        41623, 41635, 41713, 41750, 41829, 41842, 41897, 42289, 42388, 42464, 42524, 42536, 42868, 42928, 42972, 43016, 43052, 43098, 43115, 43687, 43941, \
+                            44027, 44085, 44193, 44199, 44216, 44286, 44567, 44843, 44845, 44857, 44901, 44943, 45479, 45828, 46230, 46232, 46394, 46464, 46712, 46713, 46715, 46741],
+                    "mv_ce": [226118, 227357, 225725, 226499, 224154, 225810, 227639, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224149, \
+                        224150, 224151, 224152, 224153, 224404, 224406, 226457, 225959, 224135, 224139, 224146, 225323, 225740, 225776, 225951, 225952, 225953, 225954, 225956, \
+                            225958, 225961, 225963, 225965, 225976, 225977, 227124, 227290, 227638, 227640, 227753],
+                    "mv_ie": [227536, 227525],
+                    "mv_de": [225318, 225319, 225321, 225322, 225324],
+                    "mv_pe": [225441, 225802, 225803, 225805, 224270, 225809, 225955, 225436]
+                }
+            }
+
         self._icustay_key = "ICUSTAY_ID"
         self._hadm_key = "HADM_ID"
         self._patient_key = "SUBJECT_ID"
@@ -123,13 +171,13 @@ class MIMICIII(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cohorts is None and cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 return labeled_cohorts
 
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+        labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         logger.info(
             "Start labeling cohorts for diagnosis prediction."
@@ -153,13 +201,21 @@ class MIMICIII(EHR):
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
             labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
-            labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
+            # labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
 
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
 
             logger.info("Done preparing diagnosis prediction for the given cohorts")
 
+        if self.bilirubin:
+            labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
+
+        if self.platelets:
+            labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+
+
         return labeled_cohorts
+
 
     def make_compatible(self, icustays):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
@@ -225,7 +281,65 @@ class MIMICIII(EHR):
         return icustays
 
 
-    
+    def clinical_task(self, cohorts, task, spark):
+
+        cohorts = spark.createDataFrame(cohorts)
+        fname = self.task_itemids[task]["fname"]
+        timestamp = self.task_itemids[task]["timestamp"]
+        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
+        excludes = self.task_itemids[task]["exclude"]
+        code = self.task_itemids[task]["code"][0]
+        value = self.task_itemids[task]["value"][0]
+        itemid = self.task_itemids[task]["itemid"][0]
+
+        table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+        table = table.drop(*excludes)
+        table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
+
+        merge = cohorts.join(table, on=self.hadm_key, how="inner")
+        if timeoffsetunit == "abs":
+            merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
+            merge = (
+                merge.withColumn(
+                    timestamp,
+                    F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
+                )
+            )
+
+        # Events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
+        merge = merge.filter(
+            ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
+                ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
+                    F.col("OUTTIME") >= F.col(timestamp)
+            )
+
+        # Average value of events
+        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+
+        # Labeling
+        if task == 'bilirubin':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2).when(
+                            (value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3).when(
+                                value_agg.avg_value >= 12.0, 4)
+                )
+        elif task == 'platelets':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value >= 150, 0).when(
+                    (value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1).when(
+                        (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
+                            (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
+                                value_agg.avg_value < 20, 4)
+                )
+
+        cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
+        cohorts = cohorts.na.fill(value=5, subset=[task])
+
+        return cohorts
+
+
     def infer_data_extension(self) -> str:
         if (len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 26):
             ext = ".csv.gz"

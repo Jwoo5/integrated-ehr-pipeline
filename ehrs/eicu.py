@@ -100,14 +100,14 @@ class eICU(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts=None, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cohorts is None and cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+        labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         if self.diagnosis:
             logger.info(
