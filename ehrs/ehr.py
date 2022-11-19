@@ -426,7 +426,7 @@ class EHR(object):
                 events = events.withColumn("TIME", F.round((F.col(timestamp_key).cast("long") - F.col("INTIME").cast("long")) / 60))
                 events = events.drop(timestamp_key)
             elif table["timeoffsetunit"] == "min":
-                events = events.withColumnRenamed(timestamp_key, "TIME")
+                events = events.withColumn("TIME", F.col(timestamp_key).cast("int"))
             else:
                 raise NotImplementedError()
 
