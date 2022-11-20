@@ -229,11 +229,10 @@ class MIMICIII(EHR):
 
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
-        logger.info(
-            "Start labeling cohorts for diagnosis prediction."
-        )
-
         if self.diagnosis:
+            logger.info(
+                "Start labeling cohorts for diagnosis prediction."
+            )
             # define diagnosis prediction task
             diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
 
@@ -257,14 +256,27 @@ class MIMICIII(EHR):
 
             logger.info("Done preparing diagnosis prediction for the given cohorts")
 
-        if self.bilirubin:
-            labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
+        if self.bilirubin or self.platelets or self.creatinine:
+            logger.info(
+                "Start labeling cohorts for clinical task prediction."
+            )
 
-        if self.platelets:
-            labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+            labeled_cohorts = spark.createDataFrame(labeled_cohorts)
+            
+            if self.bilirubin:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
 
-        if self.creatinine:
-            labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
+            if self.platelets:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+
+            if self.creatinine:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
+
+            labeled_cohorts = labeled_cohorts.toPandas()
+
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
+
+            logger.info("Done preparing clinical task prediction for the given cohorts")
 
         return labeled_cohorts
 
@@ -335,7 +347,6 @@ class MIMICIII(EHR):
 
     def clinical_task(self, cohorts, task, spark):
 
-        cohorts = spark.createDataFrame(cohorts)
         fname = self.task_itemids[task]["fname"]
         timestamp = self.task_itemids[task]["timestamp"]
         timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]

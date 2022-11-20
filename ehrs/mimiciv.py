@@ -137,13 +137,35 @@ class MIMICIV(EHR):
                     "itemid": [51265]
                 },
                 "dialysis": {
-                    "ce": [226118, 227357, 225725, 226499, 224154, 225810, 227639, 225183, 227438, 224191, 225806, 225807, \
-                        228004, 228005, 228006, 224144, 224145, 224149, 224150, 224151, 224152, 224153, 224404, 224406, 226457, 225959, \
-                        224135, 224139, 224146, 225323, 225740, 225776, 225951, 225952, 225953, 225954, 225956, 225958, 225961, 225963, \
-                        225965, 225976, 225977, 227124, 227290, 227638, 227640, 227753], 
-                    "oe": [40386],
-                    "ie": [227536, 227525],
-                    "pe": [225441, 225802, 225803, 225805, 224270, 225809, 225955, 225436]
+                    "tables": {
+                        "chartevents": {
+                            "fname": "icu/chartevents" + self.ext,
+                            "timestamp": "charttime",
+                            "timeoffsetunit": "abs",
+                            "include": ["subject_id", "itemid", "value","charttime"],
+                            "itemid": {
+                                "ce": [226499, 224154, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224153, 226457]
+                            }
+                        },
+                        "inputevents": {
+                            "fname": "icu/inputevents" + self.ext,
+                            "timestamp": "starttime",
+                            "timeoffsetunit": "abs",
+                            "include": ["subject_id", "itemid", "amount", "starttime"],
+                            "itemid": {
+                                "ie": [227536, 227525]
+                            }
+                        }, 
+                        "procedureevents": {
+                            "fname": "icu/procedureevents" + self.ext,
+                            "timestamp": "starttime",
+                            "timeoffsetunit": "abs",
+                            "include": ["subject_id", "itemid", "value", "starttime"],
+                            "itemid": {
+                                "pe": [225441, 225802, 225803, 225805, 225809, 225955]
+                            }
+                        }
+                    }
                 }
             }
 
@@ -205,11 +227,27 @@ class MIMICIV(EHR):
 
             logger.info("Done preparing diagnosis prediction for the given cohorts")
 
-        if self.bilirubin:
-            labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
+        if self.bilirubin or self.platelets or self.creatinine:
+            logger.info(
+                "Start labeling cohorts for clinical task prediction."
+            )
 
-        if self.platelets:
-            labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+            labeled_cohorts = spark.createDataFrame(labeled_cohorts)
+            
+            if self.bilirubin:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
+
+            if self.platelets:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+
+            if self.creatinine:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
+
+            labeled_cohorts = labeled_cohorts.toPandas()
+
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
+
+            logger.info("Done preparing clinical task prediction for the given cohorts")
 
         return labeled_cohorts
 
@@ -308,7 +346,6 @@ class MIMICIV(EHR):
 
     def clinical_task(self, cohorts, task, spark):
 
-        cohorts = spark.createDataFrame(cohorts)
         fname = self.task_itemids[task]["fname"]
         timestamp = self.task_itemids[task]["timestamp"]
         timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
@@ -331,12 +368,65 @@ class MIMICIV(EHR):
                 )
             )
 
-        # Events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
+        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
         merge = merge.filter(
             ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
                 ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
                     F.col("OUTTIME") >= F.col(timestamp)
             )
+
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
+        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/treatment/rrt.sql (Dialysis Active)
+        if task == "creatinine":
+
+            def _check_dialysis(cohort, table, timecolumn, timeoffsetunit):
+
+                table = table.withColumn(timecolumn, F.to_timestamp(timecolumn))
+
+                # Icustays with dialysis
+                merge = cohort.join(table, on=self.patient_key, how="inner")
+                if timeoffsetunit == "abs":
+                    merge = (
+                        merge.withColumn(
+                            timecolumn,
+                            F.round((F.col(timecolumn).cast("long") - F.col("INTIME").cast("long")) / 60)
+                        )
+                    )
+                merge = merge.filter(
+                    ((self.obs_size + self.pred_size) * 60) >= F.col(timecolumn)).filter(
+                        F.col("OUTTIME") >= F.col(timecolumn)
+                )
+                
+                # Eliminate icustays with dialysis
+                cohort = cohort.join(merge, on=self.icustay_key, how="left_anti")
+
+                return cohort
+
+            unique_cohort = merge.dropDuplicates([self.icustay_key]).select(self.icustay_key, self.patient_key, "INTIME", "OUTTIME")
+
+            dialysis_tables = self.task_itemids["dialysis"]["tables"]
+            
+            chartevents = spark.read.csv(os.path.join(self.data_dir, "chartevents" + self.ext), header=True)
+            inputevents = spark.read.csv(os.path.join(self.data_dir, "inputevents" + self.ext), header=True)
+            procedureevents = spark.read.csv(os.path.join(self.data_dir, "procedureevents" + self.ext), header=True)
+            
+            chartevents = chartevents.select(*dialysis_tables["chartevents"]["include"])
+            inputevents = inputevents.select(*dialysis_tables["inputevents"]["include"])
+            procedureevents = procedureevents.select(*dialysis_tables["procedureevents"]["include"])
+
+            # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
+            ce = chartevents.filter((((F.col("itemid") == 225965) & (F.col("value") == "In use")) \
+                | (F.col("itemid").isin(dialysis_tables["chartevents"]["itemid"]["ce"])) & F.col("value").isNotNull())
+            )
+            ie = inputevents.filter(F.col("itemid").isin(dialysis_tables["inputevents"]["itemid"]["ie"])).filter(F.col("amount") > 0)
+            pe = procedureevents.filter(F.col("itemid").isin(dialysis_tables["procedureevents"]["itemid"]["pe"])).filter(F.col("value").isNotNull())
+
+            unique_cohort = _check_dialysis(unique_cohort, ce, "charttime", dialysis_tables["chartevents"]["timeoffsetunit"])
+            unique_cohort = _check_dialysis(unique_cohort, ie, "starttime", dialysis_tables["inputevents"]["timeoffsetunit"])
+            unique_cohort = _check_dialysis(unique_cohort, pe, "starttime", dialysis_tables["procedureevents"]["timeoffsetunit"])
+
+            # Cohort without dialysis
+            merge = merge.join(unique_cohort, on=self.icustay_key, how="inner")
 
         # Average value of events
         value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
@@ -359,9 +449,17 @@ class MIMICIV(EHR):
                                 value_agg.avg_value < 20, 4)
                 )
 
+        elif task == 'creatinine':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
+                            (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
+                                value_agg.avg_value >= 5, 4)
+                )
+
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
         cohorts = cohorts.na.fill(value=5, subset=[task])
-        breakpoint()
 
         return cohorts
     
