@@ -140,18 +140,68 @@ class MIMICIII(EHR):
                     "itemid": [51265]
                 },
                 "dialysis": {
-                    "cv_ce": [152,148,149,146,147,151,150,7949,229,235,241,247,253,259,265,271,582,466,917,927,6250], 
-                    "cv_ie": [40788, 40907, 41063, 41147, 41307, 41460, 41620, 41711, 41791, 41792, 42562, 43829, 44037, 44188, 44526, 44527, \
-                        44584, 44591, 44698, 44927, 44954, 45157, 45268, 45352, 45353, 46012, 46013, 46172, 46173, 46250, 46262, 46292, 46293, 46311, 46389, 46574, 46681, 46720, 46769, 46773],
-                    "cv_oe": [40386, 40425, 40426, 40507, 40613, 40624, 40690, 40745, 40789, 40881, 40910, 41016, 41034, 41069, 41112, 41250, 41374, 41417, 41500, 41527, \
-                        41623, 41635, 41713, 41750, 41829, 41842, 41897, 42289, 42388, 42464, 42524, 42536, 42868, 42928, 42972, 43016, 43052, 43098, 43115, 43687, 43941, \
-                            44027, 44085, 44193, 44199, 44216, 44286, 44567, 44843, 44845, 44857, 44901, 44943, 45479, 45828, 46230, 46232, 46394, 46464, 46712, 46713, 46715, 46741],
-                    "mv_ce": [226118, 227357, 225725, 226499, 224154, 225810, 227639, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224149, \
-                        224150, 224151, 224152, 224153, 224404, 224406, 226457, 225959, 224135, 224139, 224146, 225323, 225740, 225776, 225951, 225952, 225953, 225954, 225956, \
-                            225958, 225961, 225963, 225965, 225976, 225977, 227124, 227290, 227638, 227640, 227753],
-                    "mv_ie": [227536, 227525],
-                    "mv_de": [225318, 225319, 225321, 225322, 225324],
-                    "mv_pe": [225441, 225802, 225803, 225805, 224270, 225809, 225955, 225436]
+                    "tables": {
+                        "chartevents": {
+                            "fname": "CHARTEVENTS" + self.ext,
+                            "timestamp": "CHARTTIME",
+                            "timeoffsetunit": "abs",
+                            "include": ["SUBJECT_ID", "ITEMID", "VALUE", "VALUENUM", "CHARTTIME", "ERROR"],
+                            "itemid": {
+                                "cv_ce": [152,148,149,146,147,151,150,7949,229,235,241,247,253,259,265,271,582,466,917,927,6250],
+                                "mv_ce": [226118, 227357, 225725, 226499, 224154, 225810, 227639, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224149, \
+                                    224150, 224151, 224152, 224153, 224404, 224406, 226457, 225959, 224135, 224139, 224146, 225323, 225740, 225776, 225951, 225952, 225953, 225954, 225956, \
+                                        225958, 225961, 225963, 225965, 225976, 225977, 227124, 227290, 227638, 227640, 227753]
+                            }
+                        },
+                        "inputevents_cv": {
+                            "fname": "INPUTEVENTS_CV" + self.ext,
+                            "timestamp": "CHARTTIME",
+                            "timeoffsetunit": "abs",
+                            "include": ["SUBJECT_ID", "ITEMID", "AMOUNT", "CHARTTIME"],
+                            "itemid": {
+                                "cv_ie": [40788, 40907, 41063, 41147, 41307, 41460, 41620, 41711, 41791, 41792, 42562, 43829, 44037, 44188, 44526, 44527, \
+                                    44584, 44591, 44698, 44927, 44954, 45157, 45268, 45352, 45353, 46012, 46013, 46172, 46173, 46250, 46262, 46292, 46293, 46311, 46389, 46574, 46681, 46720, 46769, 46773]
+                            }
+                        },
+                        "outputevents": {
+                            "fname": "OUTPUTEVENTS" + self.ext,
+                            "timestamp": "CHARTTIME",
+                            "timeoffsetunit": "abs",
+                            "include": ["SUBJECT_ID", "ITEMID", "VALUE", "CHARTTIME"],
+                            "itemid": {
+                                "cv_oe": [40386, 40425, 40426, 40507, 40613, 40624, 40690, 40745, 40789, 40881, 40910, 41016, 41034, 41069, 41112, 41250, 41374, 41417, 41500, 41527, \
+                            41623, 41635, 41713, 41750, 41829, 41842, 41897, 42289, 42388, 42464, 42524, 42536, 42868, 42928, 42972, 43016, 43052, 43098, 43115, 43687, 43941, \
+                                44027, 44085, 44193, 44199, 44216, 44286, 44567, 44843, 44845, 44857, 44901, 44943, 45479, 45828, 46230, 46232, 46394, 46464, 46712, 46713, 46715, 46741],
+                            }
+                        }, 
+                        "inputevents_mv": {
+                            "fname": "INPUTEVENTS_MV" + self.ext,
+                            "timestamp": "STARTTIME",
+                            "timeoffsetunit": "abs",
+                            "include": ["SUBJECT_ID", "ITEMID", "AMOUNT", "STARTTIME"],
+                            "itemid": {
+                                "mv_ie": [227536, 227525]
+                            }
+                        }, 
+                        "datetimeevents": {
+                            "fname": "DATETIMEEVENTS" + self.ext,
+                            "timestamp": "CHARTTIME",
+                            "timeoffsetunit": "abs",
+                            "include": ["SUBJECT_ID", "ITEMID", "CHARTTIME"],
+                            "itemid": {
+                                "mv_de": [225318, 225319, 225321, 225322, 225324]
+                            }
+                        }, 
+                        "procedureevents_mv": {
+                            "fname": "PROCEDUREEVENTS_MV" + self.ext,
+                            "timestamp": "STARTTIME",
+                            "timeoffsetunit": "abs",
+                            "include": ["SUBJECT_ID", "ITEMID", "STARTTIME"],
+                            "itemid": {
+                                "mv_pe": [225441, 225802, 225803, 225805, 224270, 225809, 225955, 225436]
+                            }
+                        }
+                    }
                 }
             }
 
@@ -213,6 +263,8 @@ class MIMICIII(EHR):
         if self.platelets:
             labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
 
+        if self.creatinine:
+            labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
 
         return labeled_cohorts
 
@@ -306,12 +358,90 @@ class MIMICIII(EHR):
                 )
             )
 
-        # Events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
+        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
         merge = merge.filter(
             ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
                 ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
                     F.col("OUTTIME") >= F.col(timestamp)
             )
+
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
+        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
+        if task == "creatinine":
+
+            def _check_dialysis(cohort, table, timecolumn, timeoffsetunit, task, icustays):
+
+                table = table.withColumn(timecolumn, F.to_timestamp(timecolumn))
+
+                # Icustays with dialysis
+                merge = cohort.join(table, on=self.patient_key, how="inner")
+                if timeoffsetunit == "abs":
+                    merge = (
+                        merge.withColumn(
+                            timecolumn,
+                            F.round((F.col(timecolumn).cast("long") - F.col("INTIME").cast("long")) / 60)
+                        )
+                    )
+                merge = merge.filter(
+                    ((self.obs_size + self.pred_size) * 60) >= F.col(timecolumn)).filter(
+                        F.col("OUTTIME") >= F.col(timecolumn)
+                )
+                if task == "cv_ce":
+                    icustays = icustays.filter(F.col("DBSOURCE") == 'carevue').select(self.icustay_key)
+                    merge = merge.join(icustays, on=self.icustay_key, how="inner")
+                
+                # Eliminate icustays with dialysis
+                cohort = cohort.join(merge, on=self.icustay_key, how="left_anti")
+
+                return cohort
+
+            unique_cohort = merge.dropDuplicates([self.icustay_key]).select(self.icustay_key, self.patient_key, "INTIME", "OUTTIME")
+
+            dialysis_tables = self.task_itemids["dialysis"]["tables"]
+            
+            chartevents = spark.read.csv(os.path.join(self.data_dir, "CHARTEVENTS" + self.ext), header=True)
+            inputevents_cv = spark.read.csv(os.path.join(self.data_dir, "INPUTEVENTS_CV" + self.ext), header=True)
+            outputevents = spark.read.csv(os.path.join(self.data_dir, "OUTPUTEVENTS" + self.ext), header=True)
+            inputevents_mv = spark.read.csv(os.path.join(self.data_dir, "INPUTEVENTS_MV" + self.ext), header=True)
+            datetimeevents = spark.read.csv(os.path.join(self.data_dir, "DATETIMEEVENTS" + self.ext), header=True)
+            procedureevents_mv = spark.read.csv(os.path.join(self.data_dir, "PROCEDUREEVENTS_MV" + self.ext), header=True)
+            icustays = spark.read.csv(os.path.join(self.data_dir, "ICUSTAYS" + self.ext), header=True)
+            
+            chartevents = chartevents.select(*dialysis_tables["chartevents"]["include"])
+            inputevents_cv = inputevents_cv.select(*dialysis_tables["inputevents_cv"]["include"])
+            outputevents = outputevents.select(*dialysis_tables["outputevents"]["include"])
+            inputevents_mv = inputevents_mv.select(*dialysis_tables["inputevents_mv"]["include"])
+            datetimeevents = datetimeevents.select(*dialysis_tables["datetimeevents"]["include"])
+            procedureevents_mv = procedureevents_mv.select(*dialysis_tables["procedureevents_mv"]["include"])
+
+            # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
+            cv_ce = chartevents.filter(F.col("ITEMID").isin(dialysis_tables["chartevents"]["itemid"]["cv_ce"])).filter(F.col("VALUE").isNotNull()).filter((F.col("ERROR").isNull()) | (F.col("ERROR") == 0)).filter( \
+                ((F.col("ITEMID").isin([152,148,149,146,147,151,150])) & (F.col("VALUE").isNotNull())) |
+                ((F.col("ITEMID").isin([229,235,241,247,253,259,265,271])) & (F.col("VALUE") == 'Dialysis Line')) |
+                ((F.col("ITEMID") == 466) & (F.col("VALUE") == 'Dialysis RN')) |
+                ((F.col("ITEMID") == 927) & (F.col("VALUE") == 'Dialysis Solutions')) |
+                ((F.col("ITEMID") == 6250) & (F.col("VALUE") == 'dialys')) |
+                ((F.col("ITEMID") == 917) & (F.col("VALUE").isin(['+ INITIATE DIALYSIS','BLEEDING FROM DIALYSIS CATHETER','FAILED DIALYSIS CATH.','FEBRILE SYNDROME;DIALYSIS', \
+                    'HYPOTENSION WITH HEMODIALYSIS','HYPOTENSION.GLOGGED DIALYSIS','INFECTED DIALYSIS CATHETER']))) |
+                ((F.col("ITEMID") == 582) & (F.col("VALUE").isin(['CAVH Start','CAVH D/C','CVVHD Start','CVVHD D/C','Hemodialysis st','Hemodialysis end'])))
+            )
+            cv_ie = inputevents_cv.filter(F.col("ITEMID").isin(dialysis_tables["inputevents_cv"]["itemid"]["cv_ie"])).filter(F.col("AMOUNT") > 0)
+            cv_oe = outputevents.filter(F.col("ITEMID").isin(dialysis_tables["outputevents"]["itemid"]["cv_oe"])).filter(F.col("VALUE") > 0)
+            mv_ce = chartevents.filter(F.col("ITEMID").isin(dialysis_tables["chartevents"]["itemid"]["mv_ce"])).filter(F.col("VALUENUM") > 0).filter((F.col("ERROR").isNull()) | (F.col("ERROR") == 0))
+            mv_ie = inputevents_mv.filter(F.col("ITEMID").isin(dialysis_tables["inputevents_mv"]["itemid"]["mv_ie"])).filter(F.col("AMOUNT") > 0)
+            mv_de = datetimeevents.filter(F.col("ITEMID").isin(dialysis_tables["datetimeevents"]["itemid"]["mv_de"]))
+            mv_pe = procedureevents_mv.filter(F.col("ITEMID").isin(dialysis_tables["procedureevents_mv"]["itemid"]["mv_pe"]))
+
+            unique_cohort = _check_dialysis(unique_cohort, cv_ce, "CHARTTIME", dialysis_tables["chartevents"]["timeoffsetunit"], "cv_ce", icustays)
+            unique_cohort = _check_dialysis(unique_cohort, cv_ie, "CHARTTIME", dialysis_tables["inputevents_cv"]["timeoffsetunit"], "cv_ie", icustays)
+            unique_cohort = _check_dialysis(unique_cohort, cv_oe, "CHARTTIME", dialysis_tables["outputevents"]["timeoffsetunit"], "cv_oe", icustays)
+            unique_cohort = _check_dialysis(unique_cohort, mv_ce, "CHARTTIME", dialysis_tables["chartevents"]["timeoffsetunit"], "mv_ce", icustays)
+            unique_cohort = _check_dialysis(unique_cohort, mv_ie, "STARTTIME", dialysis_tables["inputevents_mv"]["timeoffsetunit"], "mv_ie", icustays)
+            unique_cohort = _check_dialysis(unique_cohort, mv_de, "CHARTTIME", dialysis_tables["datetimeevents"]["timeoffsetunit"], "mv_de", icustays)
+            unique_cohort = _check_dialysis(unique_cohort, mv_pe, "STARTTIME", dialysis_tables["procedureevents_mv"]["timeoffsetunit"], "mv_pe", icustays)
+
+            # Cohort without dialysis
+            merge = merge.join(unique_cohort, on=self.icustay_key, how="inner")
 
         # Average value of events
         value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
@@ -332,6 +462,15 @@ class MIMICIII(EHR):
                         (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
                             (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
                                 value_agg.avg_value < 20, 4)
+                )
+
+        elif task == 'creatinine':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
+                            (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
+                                value_agg.avg_value >= 5, 4)
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")

@@ -588,8 +588,8 @@ class EHR(object):
                 pickle.dump(data, f)
             return events["TIME"].to_frame()
 
-        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        # os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
 
         events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
 
@@ -610,7 +610,7 @@ class EHR(object):
             stay_g.create_dataset('time', data = data['time'], dtype='i')
             active_stay_ids.append(int(stay_id))
 
-        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         # Drop patients with few events
 
         logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
