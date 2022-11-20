@@ -359,8 +359,7 @@ class EHR(object):
         # in: cohorts, sparksession
         # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
         logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
-        if not (self.bilirubin or self.platelets or self.creatinine):
-            cohorts = spark.createDataFrame(cohorts)
+        cohorts = spark.createDataFrame(cohorts)
 
         events_dfs = []
         for table in self.tables:
