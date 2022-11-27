@@ -272,9 +272,9 @@ class MIMICIII(EHR):
             if self.creatinine:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
 
-            labeled_cohorts = labeled_cohorts.toPandas()
+            # labeled_cohorts = labeled_cohorts.toPandas()
 
-            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
+            # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
 

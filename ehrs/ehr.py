@@ -358,8 +358,13 @@ class EHR(object):
     def process_tables(self, cohorts, spark):
         # in: cohorts, sparksession
         # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
-        logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
-        cohorts = spark.createDataFrame(cohorts)
+        if isinstance(cohorts, pd.DataFrame):
+            logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
+            cohorts = spark.createDataFrame(cohorts)
+            print("Converted Cohort to Pyspark DataFrame")
+        else:
+            logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(cohorts.count()))
+            
 
         events_dfs = []
         for table in self.tables:
@@ -611,6 +616,10 @@ class EHR(object):
 
         shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         # Drop patients with few events
+
+        if not isinstance(cohorts, pd.DataFrame):
+            cohorts = cohorts.toPandas()
+            print(cohorts)
 
         logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
         cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
