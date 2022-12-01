@@ -169,6 +169,23 @@ class MIMICIV(EHR):
                 }
             }
 
+        self.disch_map_dict = {
+            "ACUTE_HOSPITAL": "Other Hospital",
+            "AGAINST ADVICE": "Other",
+            "ASSISTED LIVING": "Other External",
+            "CHRONIC/LONG TERM ACUTE CARE": "Other Hospital",
+            "HEALTHCARE FACILITY": "Other External",
+            "HOME": "Home",
+            "HOME HEALTH CARE": "Home",
+            "HOSPICE": "Home",
+            "IN_HOSPITAL_MORTALITY": "IN_HOSPITAL_MORTALITY",
+            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
+            "OTHER FACILITY": "Other External",
+            "PSYCH FACILITY": "Other Hospital",
+            "REHAB": "Rehabilitation",
+            "SKILLED NURSING FACILITY": "Skilled Nursing Facility",
+        }
+
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
@@ -298,6 +315,7 @@ class MIMICIV(EHR):
             & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
             & (icustays["discharge_location"] == "Death")
         )
+        icustays["discharge_location"] = icustays["discharge_location"].map(self.disch_map_dict)
         icustays.rename(columns={"discharge_location": "HOS_DISCHARGE_LOCATION"}, inplace=True)
 
         icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
