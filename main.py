@@ -89,12 +89,6 @@ def get_parser():
         help="min event size to skip small samples",
     )
     parser.add_argument(
-        "--min_ds_event_size",
-        type=int,
-        default=50,
-        help="min event size to skip small samples for data sampling task"
-    )
-    parser.add_argument(
         "--min_age", type=int, default=18, help="min age to skip too young patients"
     )
     parser.add_argument(
@@ -104,16 +98,71 @@ def get_parser():
         "--obs_size", type=int, default=12, help="observation window size by the hour"
     )
     parser.add_argument(
-        "--gap_size", type=int, default=6, help="time gap window size by the hour"
+        "--gap_size", type=int, default=0, help="time gap window size by the hour"
     )
     parser.add_argument(
-        "--pred_size", type=int, default=48, help="prediction window size by the hour"
+        "--pred_size", type=int, default=24, help="prediction window size by the hour"
+    )
+    parser.add_argument(
+        "--long_term_pred_size", type=int, default=336, help="prediction window size by the hour (for long term mortality task)"
     )
     parser.add_argument(
         "--first_icu",
         action="store_true",
         help="whether to use only the first icu or not",
     )
+
+    # tasks
+    parser.add_argument(
+        "--mortality", action='store_true',
+        help="whether to include mortality task or not"
+    )
+    parser.add_argument(
+        "--long_term_mortality", action='store_true',
+        help="whether to include long term mortality task or not"
+    )
+    parser.add_argument(
+        "--los_3day", action='store_true',
+        help="whether to include 3-day los task or not"
+    )
+    parser.add_argument(
+        "--los_7day", action='store_true',
+        help="whether to include 7-day los task or not"
+    )
+    parser.add_argument(
+        "--readmission", action='store_true',
+        help="whether to include readmission task or not"
+    )
+    parser.add_argument(
+        "--final_acuity", action='store_true',
+        help="whether to include final acuity task or not"
+    )
+    parser.add_argument(
+        "--imminent_discharge", action="store_true",
+        help="whether to include imminent discharge task or not"
+    )
+    parser.add_argument(
+        "--diagnosis", action='store_true',
+        help="whether to include diagnosis task or not"
+    )
+    parser.add_argument(
+        "--creatinine", action='store_true',
+        help="whether to include creatinine task or not"
+    )
+    parser.add_argument(
+        "--bilirubin", action='store_true',
+        help="whether to include bilirubin task or not"
+    )
+    parser.add_argument(
+        "--platelets", action='store_true',
+        help="whether to include platelets task or not"
+    )
+    parser.add_argument(
+        "--crp", action='store_true',
+        help="whether to include c-reactive protein task or not"
+    )
+
+
     parser.add_argument(
         "--chunk_size",
         type=int,

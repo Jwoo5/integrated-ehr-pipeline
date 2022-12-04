@@ -151,38 +151,39 @@ class eICU(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts=None, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cohorts is None and cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+        labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
-        logger.info(
-            "Start labeling cohorts for diagnosis prediction."
-        )
+        if self.diagnosis:
+            logger.info(
+                "Start labeling cohorts for diagnosis prediction."
+            )
 
-        str2cat = self.make_dx_mapping()
-        dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
-        dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
-        dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
-        # Ignore Rare Class(14)
-        dx = dx[(dx["diagnosis"] != -1) & (dx["diagnosis"] != 14)]
-        dx.loc[dx['diagnosis']>=14, "diagnosis"] -= 1
-        dx = (
-            dx.groupby(self.hadm_key)['diagnosis']
-            .agg(lambda x: list(set(x)))
-            .to_frame()
-        )
-        labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
-        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+            str2cat = self.make_dx_mapping()
+            dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+            dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
+            dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
+            # Ignore Rare Class(14)
+            dx = dx[(dx["diagnosis"] != -1) & (dx["diagnosis"] != 14)]
+            dx.loc[dx['diagnosis']>=14, "diagnosis"] -= 1
+            dx = (
+                dx.groupby(self.hadm_key)['diagnosis']
+                .agg(lambda x: list(set(x)))
+                .to_frame()
+            )
+            labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
+            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
-        self.labeled_cohorts = labeled_cohorts
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+            self.labeled_cohorts = labeled_cohorts
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
 
-        logger.info("Done preparing diagnosis prediction for the given cohorts")
+            logger.info("Done preparing diagnosis prediction for the given cohorts")
 
         return labeled_cohorts
 

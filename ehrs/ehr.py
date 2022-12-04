@@ -35,7 +35,7 @@ class EHR(object):
             logger.warn(
                 "--cache is set to True. Note that it forces to load cached"
                 " data from {},".format(cache_dir)
-                + " which may ignore some arguments such as --first_icu."
+                + " which may ignore some arguments such as --first_icu, as well as task related arguments (--mortality, --los_3day, etc.)"
                 " If you want to avoid this, do not set --cache to True."
             )
 
@@ -50,14 +50,8 @@ class EHR(object):
         self.min_event_size = (
             cfg.min_event_size if cfg.min_event_size is not None else 1
         )
-        self.min_ds_event_size = (
-            cfg.min_ds_event_size if cfg.min_ds_event_size is not None else 1
-        )
         assert self.min_event_size > 0, (
             "--min_event_size could not be negative or zero", self.min_event_size
-        )
-        assert self.min_ds_event_size > 0, (
-            "--min_ds_event_size could not be negative or zero", self.min_ds_event_size,
         )
         assert self.min_event_size <= self.max_event_size, (
             self.min_event_size,
@@ -74,8 +68,23 @@ class EHR(object):
         self.obs_size = cfg.obs_size
         self.gap_size = cfg.gap_size
         self.pred_size = cfg.pred_size
+        self.long_term_pred_size = cfg.long_term_pred_size
 
         self.first_icu = cfg.first_icu
+
+        # tasks
+        self.mortality = cfg.mortality
+        self.long_term_mortality = cfg.long_term_mortality
+        self.los_3day = cfg.los_3day
+        self.los_7day = cfg.los_7day
+        self.readmission = cfg.readmission
+        self.final_acuity = cfg.final_acuity
+        self.imminent_discharge = cfg.imminent_discharge
+        self.diagnosis = cfg.diagnosis
+        self.creatinine = cfg.creatinine
+        self.bilirubin = cfg.bilirubin
+        self.platelets = cfg.platelets
+        self.crp = cfg.crp
 
         self.chunk_size = cfg.chunk_size
 
@@ -178,11 +187,13 @@ class EHR(object):
         # since it requires to observe each next icustays,
         # which would have been excluded in the final cohorts
         icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
-        icustays["readmission"] = 1
-        icustays.loc[
-            icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
-            "readmission"
-        ] = 0
+        
+        if self.readmission:
+            icustays["readmission"] = 1
+            icustays.loc[
+                icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
+                "readmission"
+            ] = 0
         if self.first_icu:
             icustays = icustays.loc[
                 icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmin()
@@ -198,7 +209,7 @@ class EHR(object):
         return icustays
 
     # TODO process specific tasks according to user choice?
-    def prepare_tasks(self, cohorts, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
@@ -231,18 +242,34 @@ class EHR(object):
         # if the discharge location of an icustay is 'Death'
         #   & intime + obs_size + gap_size <= dischtime <= intime + obs_size + pred_size
         # it is assigned positive label on the mortality prediction
-        if self.rolling_from_last:
-            labeled_cohorts["mortality"] = (
-                (
-                (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
-                | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+
+        if self.mortality:
+            if self.rolling_from_last:
+                labeled_cohorts["mortality"] = (
+                    (
+                        (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
+                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+                    )
+                    & (
+                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60 - self.gap_size * 60
+                    )
                 )
-                & (
-                    labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60 - self.gap_size * 60
-                )
-            ).astype(int)
-        else:
-            labeled_cohorts["mortality"] = (
+            else:
+                labeled_cohorts["mortality"] = (
+                    (
+                        (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
+                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+                    )
+                    & (
+                        self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+                    )
+                    & (
+                        labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60
+                    )
+                ).astype(int)
+
+        if self.long_term_mortality:
+            labeled_cohorts["long_term_mortality"] = (
                 (
                     (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
                     | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
@@ -251,80 +278,89 @@ class EHR(object):
                     self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
                 )
                 & (
-                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60
+                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.long_term_pred_size * 60
                 )
             ).astype(int)
-        # if the discharge of 'Death' occurs in icu or hospital
-        # we retain these cases for the imminent discharge task
-        labeled_cohorts["IN_HOSPITAL_MORTALITY"] = (
-            (~labeled_cohorts["IN_ICU_MORTALITY"])
-            & (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-        ).astype(int)
 
-        # define final acuity prediction task
-        labeled_cohorts["final_acuity"] = labeled_cohorts["HOS_DISCHARGE_LOCATION"]
-        labeled_cohorts.loc[
-            labeled_cohorts["IN_ICU_MORTALITY"] == 1, "final_acuity"
-        ] = "IN_ICU_MORTALITY"
-        labeled_cohorts.loc[
-            labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1, "final_acuity"
-        ] = "IN_HOSPITAL_MORTALITY"
-        # NOTE we drop null value samples
-        labeled_cohorts = labeled_cohorts[~labeled_cohorts["final_acuity"].isna()]
+        if self.los_3day:
+            labeled_cohorts["los_3day"] = (labeled_cohorts["LOS"] > 3).astype(int)
+        if self.los_7day:
+            labeled_cohorts["los_7day"] = (labeled_cohorts["LOS"] > 7).astype(int)
 
-        with open(os.path.join(self.dest, self.ehr_name + "_final_acuity_classes.tsv"), "w") as f:
-            for i, cat in enumerate(
-                labeled_cohorts["final_acuity"].astype("category").cat.categories
-            ):
-                print("{}\t{}".format(i, cat), file=f)
-        labeled_cohorts["final_acuity"] = (
-            labeled_cohorts["final_acuity"].astype("category").cat.codes
-        )
+        if self.final_acuity or self.imminent_discharge:
 
+            # if the discharge of 'Death' occurs in icu or hospital
+            # we retain these cases for the imminent discharge task
+            labeled_cohorts["IN_HOSPITAL_MORTALITY"] = (
+                (~labeled_cohorts["IN_ICU_MORTALITY"])
+                & (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+            ).astype(int)
 
-        # define imminent discharge prediction task
-        if self.rolling_from_last:
-            is_discharged = (
-                labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60 - self.gap_size * 60
-            )
-        else:
-            is_discharged = (
-                (
-                    self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
+            if self.final_acuity:
+
+                # define final acuity prediction task
+                labeled_cohorts["final_acuity"] = labeled_cohorts["HOS_DISCHARGE_LOCATION"]
+                labeled_cohorts.loc[
+                    labeled_cohorts["IN_ICU_MORTALITY"] == 1, "final_acuity"
+                ] = "IN_ICU_MORTALITY"
+                labeled_cohorts.loc[
+                    labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1, "final_acuity"
+                ] = "IN_HOSPITAL_MORTALITY"
+                # NOTE we drop null value samples #TODO
+                labeled_cohorts = labeled_cohorts[~labeled_cohorts["final_acuity"].isna()]
+
+                with open(os.path.join(self.dest, self.ehr_name + "_final_acuity_classes.tsv"), "w") as f:
+                    for i, cat in enumerate(
+                        labeled_cohorts["final_acuity"].astype("category").cat.categories
+                    ):
+                        print("{}\t{}".format(i, cat), file=f)
+                labeled_cohorts["final_acuity"] = (
+                    labeled_cohorts["final_acuity"].astype("category").cat.codes
                 )
-                & (
-                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
-            )
-        labeled_cohorts.loc[is_discharged, "imminent_discharge"] = labeled_cohorts.loc[
-            is_discharged, "HOS_DISCHARGE_LOCATION"
-        ]
-        labeled_cohorts.loc[
-            is_discharged & (
-                (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
-                | (labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1)
-            ),
-            "imminent_discharge"
-        ] = "Death"
-        labeled_cohorts.loc[~is_discharged, "imminent_discharge"] = "No Discharge"
-        # NOTE we drop null value samples
-        labeled_cohorts = labeled_cohorts[~labeled_cohorts["imminent_discharge"].isna()]
 
-        with open(
-            os.path.join(self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"), "w"
-        ) as f:
-            for i, cat in enumerate(
-                labeled_cohorts["imminent_discharge"].astype("category").cat.categories
-            ):
-                print("{}\t{}".format(i, cat), file=f)
-        labeled_cohorts["imminent_discharge"] = (
-            labeled_cohorts["imminent_discharge"].astype("category").cat.codes
-        )
+            if self.imminent_discharge:
+            # define imminent discharge prediction task
+                is_discharged = (
+                    (
+                        self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
+                    )
+                    & (
+                        labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
+                )
+                labeled_cohorts.loc[is_discharged, "imminent_discharge"] = labeled_cohorts.loc[
+                    is_discharged, "HOS_DISCHARGE_LOCATION"
+                ]
+                labeled_cohorts.loc[
+                    is_discharged & (
+                        (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
+                        | (labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1)
+                    ),
+                    "imminent_discharge"
+                ] = "Death"
+                labeled_cohorts.loc[~is_discharged, "imminent_discharge"] = "No Discharge"
+                # NOTE we drop null value samples #TODO
+                labeled_cohorts = labeled_cohorts[~labeled_cohorts["imminent_discharge"].isna()]
+
+                with open(
+                    os.path.join(self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"), "w"
+                ) as f:
+                    for i, cat in enumerate(
+                        labeled_cohorts["imminent_discharge"].astype("category").cat.categories
+                    ):
+                        print("{}\t{}".format(i, cat), file=f)
+                labeled_cohorts["imminent_discharge"] = (
+                    labeled_cohorts["imminent_discharge"].astype("category").cat.codes
+                )
+
+            labeled_cohorts = labeled_cohorts.drop(
+                columns=["IN_HOSPITAL_MORTALITY"]
+            )
 
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
             columns=[
+                "LOS",
                 "IN_ICU_MORTALITY",
-                "IN_HOSPITAL_MORTALITY",
                 "DISCHTIME",
                 "HOS_DISCHARGE_LOCATION"
             ]
@@ -340,8 +376,13 @@ class EHR(object):
     def process_tables(self, cohorts, spark):
         # in: cohorts, sparksession
         # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
-        logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
-        cohorts = spark.createDataFrame(cohorts)
+        if isinstance(cohorts, pd.DataFrame):
+            logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
+            cohorts = spark.createDataFrame(cohorts)
+            print("Converted Cohort to Pyspark DataFrame")
+        else:
+            logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(cohorts.count()))
+            
 
         events_dfs = []
         for table in self.tables:
@@ -412,11 +453,7 @@ class EHR(object):
             else:
                 raise NotImplementedError()
 
-            if self.rolling_from_last:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= F.col("OUTTIME") - gap_size * 60)
-                events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
-            elif not self.data_sampling:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
+            events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
@@ -586,8 +623,6 @@ class EHR(object):
             data = {
                 "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
                 "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
-                "hi_start": hi_start,
-                "fl_start": fl_start,
                 "time": df["TIME"].values,
             }
             with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
@@ -657,7 +692,7 @@ class EHR(object):
 
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
-        labeled_cohorts = self.prepare_tasks(cohorts, cached=self.cache)
+        labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
         events = self.process_tables(labeled_cohorts, spark)
         self.make_input(labeled_cohorts, events, spark)
 

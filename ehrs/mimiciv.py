@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import glob
 from ehrs import register_ehr, EHR
+import pyspark.sql.functions as F
+import pyspark.sql.types as T
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +107,68 @@ class MIMICIV(EHR):
             },
         ]
 
+        if self.creatinine or self.bilirubin or self.platelets:
+            self.task_itemids = {
+                "creatinine": {
+                    "fname": "hosp/labevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "code": ["itemid"],
+                    "value": ["valuenum"],
+                    "itemid": [50912]
+                },
+                "bilirubin": {
+                    "fname": "hosp/labevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "code": ["itemid"],
+                    "value": ["valuenum"],
+                    "itemid": [50885]
+                },
+                "platelets": {
+                    "fname": "hosp/labevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "code": ["itemid"],
+                    "value": ["valuenum"],
+                    "itemid": [51265]
+                },
+                "dialysis": {
+                    "tables": {
+                        "chartevents": {
+                            "fname": "icu/chartevents" + self.ext,
+                            "timestamp": "charttime",
+                            "timeoffsetunit": "abs",
+                            "include": ["subject_id", "itemid", "value","charttime"],
+                            "itemid": {
+                                "ce": [226499, 224154, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224153, 226457]
+                            }
+                        },
+                        "inputevents": {
+                            "fname": "icu/inputevents" + self.ext,
+                            "timestamp": "starttime",
+                            "timeoffsetunit": "abs",
+                            "include": ["subject_id", "itemid", "amount", "starttime"],
+                            "itemid": {
+                                "ie": [227536, 227525]
+                            }
+                        }, 
+                        "procedureevents": {
+                            "fname": "icu/procedureevents" + self.ext,
+                            "timestamp": "starttime",
+                            "timeoffsetunit": "abs",
+                            "include": ["subject_id", "itemid", "value", "starttime"],
+                            "itemid": {
+                                "pe": [225441, 225802, 225803, 225805, 225809, 225955]
+                            }
+                        }
+                    }
+                }
+            }
+
         if cfg.use_more_tables:
             self.tables+=[
                 {
@@ -167,6 +231,23 @@ class MIMICIV(EHR):
                 },
             ]
 
+        self.disch_map_dict = {
+            "ACUTE_HOSPITAL": "Other Hospital",
+            "AGAINST ADVICE": "Other",
+            "ASSISTED LIVING": "Other External",
+            "CHRONIC/LONG TERM ACUTE CARE": "Other Hospital",
+            "HEALTHCARE FACILITY": "Other External",
+            "HOME": "Home",
+            "HOME HEALTH CARE": "Home",
+            "HOSPICE": "Home",
+            "IN_HOSPITAL_MORTALITY": "IN_HOSPITAL_MORTALITY",
+            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
+            "OTHER FACILITY": "Other External",
+            "PSYCH FACILITY": "Other Hospital",
+            "REHAB": "Rehabilitation",
+            "SKILLED NURSING FACILITY": "Skilled Nursing Facility",
+        }
+
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
@@ -183,46 +264,69 @@ class MIMICIV(EHR):
 
         return cohorts
 
-    def prepare_tasks(self, cohorts, cached=False):
+    def prepare_tasks(self, cohorts, spark, cached=False):
         if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
             if labeled_cohorts is not None:
                 self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
-        labeled_cohorts = super().prepare_tasks(cohorts, cached)
+        labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
-        logger.info(
-            "Start labeling cohorts for diagnosis prediction."
-        )
+        if self.diagnosis:
+            logger.info(
+                "Start labeling cohorts for diagnosis prediction."
+            )
 
-        # define diagnosis prediction task
-        diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
+            # define diagnosis prediction task
+            diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
 
-        diagnoses = self.icd10toicd9(diagnoses)
+            diagnoses = self.icd10toicd9(diagnoses)
 
-        ccs_dx = pd.read_csv(self.ccs_path)
-        ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
-        ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
-        lvl1 = {
-            x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
-        }
+            ccs_dx = pd.read_csv(self.ccs_path)
+            ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
+            ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
+            lvl1 = {
+                x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+            }
 
-        diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
+            diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
 
-        diagnoses = diagnoses[(diagnoses['diagnosis'].notnull()) & (diagnoses['diagnosis']!=14)]
-        diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
-        diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
+            diagnoses = diagnoses[(diagnoses['diagnosis'].notnull()) & (diagnoses['diagnosis']!=14)]
+            diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
+            diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
 
-        labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
+            labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
-        # Some of patients(21) does not have dx codes
-        labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
+            # Some of patients(21) does not have dx codes
+            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
-        self.labeled_cohorts = labeled_cohorts
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+            self.labeled_cohorts = labeled_cohorts
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
 
-        logger.info("Done preparing diagnosis prediction for the given cohorts")
+            logger.info("Done preparing diagnosis prediction for the given cohorts")
+
+        if self.bilirubin or self.platelets or self.creatinine:
+            logger.info(
+                "Start labeling cohorts for clinical task prediction."
+            )
+
+            labeled_cohorts = spark.createDataFrame(labeled_cohorts)
+            
+            if self.bilirubin:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
+
+            if self.platelets:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+
+            if self.creatinine:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
+
+            # labeled_cohorts = labeled_cohorts.toPandas()
+
+            # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
+
+            logger.info("Done preparing clinical task prediction for the given cohorts")
 
         return labeled_cohorts
 
@@ -273,6 +377,7 @@ class MIMICIV(EHR):
             & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
             & (icustays["discharge_location"] == "Death")
         )
+        icustays["discharge_location"] = icustays["discharge_location"].map(self.disch_map_dict)
         icustays.rename(columns={"discharge_location": "HOS_DISCHARGE_LOCATION"}, inplace=True)
 
         icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
@@ -317,6 +422,134 @@ class MIMICIV(EHR):
             lambda x: icd_convert(x["icd_version"], x["icd_code"]), axis=1
         )
         return dx
+
+
+    def clinical_task(self, cohorts, task, spark):
+
+        fname = self.task_itemids[task]["fname"]
+        timestamp = self.task_itemids[task]["timestamp"]
+        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
+        excludes = self.task_itemids[task]["exclude"]
+        code = self.task_itemids[task]["code"][0]
+        value = self.task_itemids[task]["value"][0]
+        itemid = self.task_itemids[task]["itemid"][0]
+
+        table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+        table = table.drop(*excludes)
+        table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
+
+        merge = cohorts.join(table, on=self.hadm_key, how="inner")
+        if timeoffsetunit == "abs":
+            merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
+            merge = (
+                merge.withColumn(
+                    timestamp,
+                    F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
+                )
+            )
+
+        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
+        if self.rolling_from_last:
+            merge = merge.filter(
+                F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60 - self.gap_size * 60
+            ).filter(F.col(timestamp)>= F.col("OUTTIME"))
+
+        else:
+            merge = merge.filter(
+                ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
+                    ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
+                        F.col("OUTTIME") >= F.col(timestamp)
+                )
+        #TODO: This logic is wrong, check after fix on master
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
+        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/treatment/rrt.sql (Dialysis Active)
+        if task == "creatinine":
+
+            def _check_dialysis(cohort, table, timecolumn, timeoffsetunit):
+
+                table = table.withColumn(timecolumn, F.to_timestamp(timecolumn))
+
+                # Icustays with dialysis
+                merge = cohort.join(table, on=self.patient_key, how="inner")
+                if timeoffsetunit == "abs":
+                    merge = (
+                        merge.withColumn(
+                            timecolumn,
+                            F.round((F.col(timecolumn).cast("long") - F.col("INTIME").cast("long")) / 60)
+                        )
+                    )
+                
+                merge = merge.filter(
+                    ((self.obs_size + self.pred_size) * 60) >= F.col(timecolumn)).filter(
+                        F.col("OUTTIME") >= F.col(timecolumn)
+                )
+                
+                # Eliminate icustays with dialysis
+                cohort = cohort.join(merge, on=self.icustay_key, how="left_anti")
+
+                return cohort
+
+            unique_cohort = merge.dropDuplicates([self.icustay_key]).select(self.icustay_key, self.patient_key, "INTIME", "OUTTIME")
+
+            dialysis_tables = self.task_itemids["dialysis"]["tables"]
+            
+            chartevents = spark.read.csv(os.path.join(self.data_dir, "chartevents" + self.ext), header=True)
+            inputevents = spark.read.csv(os.path.join(self.data_dir, "inputevents" + self.ext), header=True)
+            procedureevents = spark.read.csv(os.path.join(self.data_dir, "procedureevents" + self.ext), header=True)
+            
+            chartevents = chartevents.select(*dialysis_tables["chartevents"]["include"])
+            inputevents = inputevents.select(*dialysis_tables["inputevents"]["include"])
+            procedureevents = procedureevents.select(*dialysis_tables["procedureevents"]["include"])
+
+            # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
+            ce = chartevents.filter((((F.col("itemid") == 225965) & (F.col("value") == "In use")) \
+                | (F.col("itemid").isin(dialysis_tables["chartevents"]["itemid"]["ce"])) & F.col("value").isNotNull())
+            )
+            ie = inputevents.filter(F.col("itemid").isin(dialysis_tables["inputevents"]["itemid"]["ie"])).filter(F.col("amount") > 0)
+            pe = procedureevents.filter(F.col("itemid").isin(dialysis_tables["procedureevents"]["itemid"]["pe"])).filter(F.col("value").isNotNull())
+
+            unique_cohort = _check_dialysis(unique_cohort, ce, "charttime", dialysis_tables["chartevents"]["timeoffsetunit"])
+            unique_cohort = _check_dialysis(unique_cohort, ie, "starttime", dialysis_tables["inputevents"]["timeoffsetunit"])
+            unique_cohort = _check_dialysis(unique_cohort, pe, "starttime", dialysis_tables["procedureevents"]["timeoffsetunit"])
+
+            # Cohort without dialysis
+            merge = merge.join(unique_cohort, on=self.icustay_key, how="inner")
+
+        # Average value of events
+        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+
+        # Labeling
+        if task == 'bilirubin':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2).when(
+                            (value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3).when(
+                                value_agg.avg_value >= 12.0, 4)
+                )
+        elif task == 'platelets':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value >= 150, 0).when(
+                    (value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1).when(
+                        (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
+                            (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
+                                value_agg.avg_value < 20, 4)
+                )
+
+        elif task == 'creatinine':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
+                            (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
+                                value_agg.avg_value >= 5, 4)
+                )
+
+        cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
+        #TODO: retain NaN values
+        cohorts = cohorts.na.fill(value=5, subset=[task])
+
+        return cohorts
     
     
     def infer_data_extension(self) -> str:
