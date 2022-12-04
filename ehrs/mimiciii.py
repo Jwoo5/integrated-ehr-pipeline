@@ -249,7 +249,6 @@ class MIMICIII(EHR):
             diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
-            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
             # labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
 
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")

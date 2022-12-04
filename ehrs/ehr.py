@@ -289,7 +289,6 @@ class EHR(object):
                     labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1, "final_acuity"
                 ] = "IN_HOSPITAL_MORTALITY"
                 # NOTE we drop null value samples #TODO
-                labeled_cohorts = labeled_cohorts[~labeled_cohorts["final_acuity"].isna()]
 
                 with open(os.path.join(self.dest, self.ehr_name + "_final_acuity_classes.tsv"), "w") as f:
                     for i, cat in enumerate(
@@ -321,7 +320,6 @@ class EHR(object):
                 ] = "Death"
                 labeled_cohorts.loc[~is_discharged, "imminent_discharge"] = "No Discharge"
                 # NOTE we drop null value samples #TODO
-                labeled_cohorts = labeled_cohorts[~labeled_cohorts["imminent_discharge"].isna()]
 
                 with open(
                     os.path.join(self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"), "w"

@@ -236,8 +236,6 @@ class MIMICIV(EHR):
 
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
-            # Some of patients(21) does not have dx codes
-            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
             self.labeled_cohorts = labeled_cohorts
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
@@ -477,7 +475,6 @@ class MIMICIV(EHR):
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
-        cohorts = cohorts.na.fill(value=5, subset=[task])
 
         return cohorts
     
