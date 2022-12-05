@@ -455,7 +455,6 @@ class MIMICIV(EHR):
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
-        cohorts = cohorts.na.fill(value=5, subset=[task])
 
         return cohorts
     
