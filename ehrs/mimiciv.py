@@ -298,8 +298,6 @@ class MIMICIV(EHR):
 
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
-            # Some of patients(21) does not have dx codes
-            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
             self.labeled_cohorts = labeled_cohorts
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
@@ -439,14 +437,48 @@ class MIMICIV(EHR):
         table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
 
         merge = cohorts.join(table, on=self.hadm_key, how="inner")
-        if timeoffsetunit == "abs":
-            merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
-            merge = (
-                merge.withColumn(
-                    timestamp,
-                    F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
-                )
+
+        # Filter Dialysis at here to use abs timestamp & agg by patient_key
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
+        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/treatment/rrt.sql (Dialysis Active)
+        if task == "creatinine":
+            dialysis_tables = self.task_itemids["dialysis"]["tables"]
+            
+            chartevents = spark.read.csv(os.path.join(self.data_dir, "icu/chartevents" + self.ext), header=True)
+            inputevents = spark.read.csv(os.path.join(self.data_dir, "icu/inputevents" + self.ext), header=True)
+            procedureevents = spark.read.csv(os.path.join(self.data_dir, "icu/procedureevents" + self.ext), header=True)
+            
+            chartevents = chartevents.select(*dialysis_tables["chartevents"]["include"])
+            inputevents = inputevents.select(*dialysis_tables["inputevents"]["include"])
+            procedureevents = procedureevents.select(*dialysis_tables["procedureevents"]["include"])
+
+            # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
+            ce = chartevents.filter((((F.col("itemid") == 225965) & (F.col("value") == "In use")) \
+                | (F.col("itemid").isin(dialysis_tables["chartevents"]["itemid"]["ce"])) & F.col("value").isNotNull())
             )
+            ie = inputevents.filter(F.col("itemid").isin(dialysis_tables["inputevents"]["itemid"]["ie"])).filter(F.col("amount") > 0)
+            pe = procedureevents.filter(F.col("itemid").isin(dialysis_tables["procedureevents"]["itemid"]["pe"])).filter(F.col("value").isNotNull())
+
+            # Extract Dialysis Times!
+            def dialysis_time(table, timecolumn):
+                return (table
+                    .withColumn("_DIALYSIS_TIME", F.to_timestamp(timecolumn))
+                    .select(self.patient_key, "_DIALYSIS_TIME")
+                )
+            ce, ie, pe = dialysis_time(ce, "charttime"), dialysis_time(ie, "starttime"), dialysis_time(pe, "starttime")
+            dialysis = ce.union(ie).union(pe)
+            dialysis = dialysis.groupby(self.patient_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
+            merge = merge.join(dialysis, on=self.patient_key, how="left")
+            merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
+            merge = merge.drop("_DIALYSIS_TIME")
+
+        merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
+        merge = (
+            merge.withColumn(
+                timestamp,
+                F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
+            )
+        )
 
         # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
         if self.rolling_from_last:
@@ -460,60 +492,6 @@ class MIMICIV(EHR):
                     ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
                         F.col("OUTTIME") >= F.col(timestamp)
                 )
-        #TODO: This logic is wrong, check after fix on master
-        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
-        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/treatment/rrt.sql (Dialysis Active)
-        if task == "creatinine":
-
-            def _check_dialysis(cohort, table, timecolumn, timeoffsetunit):
-
-                table = table.withColumn(timecolumn, F.to_timestamp(timecolumn))
-
-                # Icustays with dialysis
-                merge = cohort.join(table, on=self.patient_key, how="inner")
-                if timeoffsetunit == "abs":
-                    merge = (
-                        merge.withColumn(
-                            timecolumn,
-                            F.round((F.col(timecolumn).cast("long") - F.col("INTIME").cast("long")) / 60)
-                        )
-                    )
-                
-                merge = merge.filter(
-                    ((self.obs_size + self.pred_size) * 60) >= F.col(timecolumn)).filter(
-                        F.col("OUTTIME") >= F.col(timecolumn)
-                )
-                
-                # Eliminate icustays with dialysis
-                cohort = cohort.join(merge, on=self.icustay_key, how="left_anti")
-
-                return cohort
-
-            unique_cohort = merge.dropDuplicates([self.icustay_key]).select(self.icustay_key, self.patient_key, "INTIME", "OUTTIME")
-
-            dialysis_tables = self.task_itemids["dialysis"]["tables"]
-            
-            chartevents = spark.read.csv(os.path.join(self.data_dir, "chartevents" + self.ext), header=True)
-            inputevents = spark.read.csv(os.path.join(self.data_dir, "inputevents" + self.ext), header=True)
-            procedureevents = spark.read.csv(os.path.join(self.data_dir, "procedureevents" + self.ext), header=True)
-            
-            chartevents = chartevents.select(*dialysis_tables["chartevents"]["include"])
-            inputevents = inputevents.select(*dialysis_tables["inputevents"]["include"])
-            procedureevents = procedureevents.select(*dialysis_tables["procedureevents"]["include"])
-
-            # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
-            ce = chartevents.filter((((F.col("itemid") == 225965) & (F.col("value") == "In use")) \
-                | (F.col("itemid").isin(dialysis_tables["chartevents"]["itemid"]["ce"])) & F.col("value").isNotNull())
-            )
-            ie = inputevents.filter(F.col("itemid").isin(dialysis_tables["inputevents"]["itemid"]["ie"])).filter(F.col("amount") > 0)
-            pe = procedureevents.filter(F.col("itemid").isin(dialysis_tables["procedureevents"]["itemid"]["pe"])).filter(F.col("value").isNotNull())
-
-            unique_cohort = _check_dialysis(unique_cohort, ce, "charttime", dialysis_tables["chartevents"]["timeoffsetunit"])
-            unique_cohort = _check_dialysis(unique_cohort, ie, "starttime", dialysis_tables["inputevents"]["timeoffsetunit"])
-            unique_cohort = _check_dialysis(unique_cohort, pe, "starttime", dialysis_tables["procedureevents"]["timeoffsetunit"])
-
-            # Cohort without dialysis
-            merge = merge.join(unique_cohort, on=self.icustay_key, how="inner")
 
         # Average value of events
         value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
@@ -546,8 +524,6 @@ class MIMICIV(EHR):
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
-        #TODO: retain NaN values
-        cohorts = cohorts.na.fill(value=5, subset=[task])
 
         return cohorts
     

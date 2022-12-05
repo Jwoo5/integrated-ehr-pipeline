@@ -269,18 +269,32 @@ class EHR(object):
                 ).astype(int)
 
         if self.long_term_mortality:
-            labeled_cohorts["long_term_mortality"] = (
-                (
-                    (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
-                    | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                )
-                & (
-                    self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
-                )
-                & (
-                    labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.long_term_pred_size * 60
-                )
-            ).astype(int)
+            if self.rolling_from_last:
+                labeled_cohorts["long_term_mortality"] = (
+                    (
+                        (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
+                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+                    )
+                    & (
+                        self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+                    )
+                    & (
+                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.long_term_pred_size * 60 - self.gap_size * 60
+                    )
+                ).astype(int)
+            else:
+                labeled_cohorts["long_term_mortality"] = (
+                    (
+                        (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
+                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+                    )
+                    & (
+                        self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+                    )
+                    & (
+                        labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.long_term_pred_size * 60
+                    )
+                ).astype(int)
 
         if self.los_3day:
             labeled_cohorts["los_3day"] = (labeled_cohorts["LOS"] > 3).astype(int)
@@ -307,7 +321,6 @@ class EHR(object):
                     labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1, "final_acuity"
                 ] = "IN_HOSPITAL_MORTALITY"
                 # NOTE we drop null value samples #TODO
-                labeled_cohorts = labeled_cohorts[~labeled_cohorts["final_acuity"].isna()]
 
                 with open(os.path.join(self.dest, self.ehr_name + "_final_acuity_classes.tsv"), "w") as f:
                     for i, cat in enumerate(
@@ -319,14 +332,19 @@ class EHR(object):
                 )
 
             if self.imminent_discharge:
-            # define imminent discharge prediction task
-                is_discharged = (
-                    (
-                        self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
+                # define imminent discharge prediction task
+                if self.rolling_from_last:
+                    is_discharged = (
+                        labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60 - self.gap_size * 60
                     )
-                    & (
-                        labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
-                )
+                else:
+                    is_discharged = (
+                        (
+                            self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
+                        )
+                        & (
+                            labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
+                    )
                 labeled_cohorts.loc[is_discharged, "imminent_discharge"] = labeled_cohorts.loc[
                     is_discharged, "HOS_DISCHARGE_LOCATION"
                 ]
@@ -339,7 +357,6 @@ class EHR(object):
                 ] = "Death"
                 labeled_cohorts.loc[~is_discharged, "imminent_discharge"] = "No Discharge"
                 # NOTE we drop null value samples #TODO
-                labeled_cohorts = labeled_cohorts[~labeled_cohorts["imminent_discharge"].isna()]
 
                 with open(
                     os.path.join(self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"), "w"
@@ -359,7 +376,6 @@ class EHR(object):
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
             columns=[
-                "LOS",
                 "IN_ICU_MORTALITY",
                 "DISCHTIME",
                 "HOS_DISCHARGE_LOCATION"
@@ -453,7 +469,11 @@ class EHR(object):
             else:
                 raise NotImplementedError()
 
-            events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
+            if self.rolling_from_last:
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= F.col("OUTTIME") - gap_size * 60)
+                events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
+            else:
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
@@ -623,6 +643,8 @@ class EHR(object):
             data = {
                 "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
                 "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
+                "hi_start": hi_start,
+                "fl_start": fl_start,
                 "time": df["TIME"].values,
             }
             with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:

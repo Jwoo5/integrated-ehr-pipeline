@@ -178,7 +178,6 @@ class eICU(EHR):
                 .to_frame()
             )
             labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
-            labeled_cohorts.dropna(subset=["diagnosis"], inplace=True)
 
             self.labeled_cohorts = labeled_cohorts
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
