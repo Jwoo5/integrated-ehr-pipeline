@@ -145,7 +145,7 @@ class MIMICIII(EHR):
                             "fname": "CHARTEVENTS" + self.ext,
                             "timestamp": "CHARTTIME",
                             "timeoffsetunit": "abs",
-                            "include": ["SUBJECT_ID", "ITEMID", "VALUE", "VALUENUM", "CHARTTIME", "ERROR"],
+                            "include": ["ICUSTAY_ID", "SUBJECT_ID", "ITEMID", "VALUE", "VALUENUM", "CHARTTIME", "ERROR"],
                             "itemid": {
                                 "cv_ce": [152,148,149,146,147,151,150,7949,229,235,241,247,253,259,265,271,582,466,917,927,6250],
                                 "mv_ce": [226118, 227357, 225725, 226499, 224154, 225810, 227639, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224149, \
@@ -431,7 +431,8 @@ class MIMICIII(EHR):
                     .select(self.patient_key, "_DIALYSIS_TIME")
                 )
 
-            cv_ce, cv_ie, cv_oe, mv_ce, mv_ie, mv_de, mv_pe = dialysis_time(cv_ce, "CHARTTIME"), dialysis_time(cv_ie, "CHARTTIME"), dialysis_time(cv_oe, "CHARTTIME"), dialysis_time(mv_ce, "CHARTTIME"), dialysis_time(mv_ie, "STARTTIME"), dialysis_time(mv_de, "CHARTTIME"), dialysis_time(mv_pe, "STARTTIME")
+            cv_ce, cv_ie, cv_oe, mv_ce, mv_ie, mv_de, mv_pe = \
+                dialysis_time(cv_ce, "CHARTTIME"), dialysis_time(cv_ie, "CHARTTIME"), dialysis_time(cv_oe, "CHARTTIME"), dialysis_time(mv_ce, "CHARTTIME"), dialysis_time(mv_ie, "STARTTIME"), dialysis_time(mv_de, "CHARTTIME"), dialysis_time(mv_pe, "STARTTIME")
 
             dialysis = cv_ce.union(cv_ie).union(cv_oe).union(mv_ce).union(mv_ie).union(mv_de).union(mv_pe)
             dialysis = dialysis.groupBy(self.patient_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
