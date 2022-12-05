@@ -205,6 +205,26 @@ class MIMICIII(EHR):
                 }
             }
 
+        self.disch_map_dict = {
+            "DISC-TRAN CANCER/CHLDRN H": "Other Hospital",
+            "DISC-TRAN TO FEDERAL HC": "Other Hospital",
+            "DISCH-TRAN TO PSYCH HOSP": "Other Hospital",
+            "HOME": "Home",
+            "HOME HEALTH CARE": "Home",
+            "HOME WITH HOME IV PROVIDR": "Home",
+            "HOSPICE-HOME": "Home",
+            "HOSPICE-MEDICAL FACILITY": "Other Hospital",
+            "ICF (Intermeditate care facility)": "Other Hospital",
+            "IN_HOSPITAL_MORTALITY": "IN_HOSPITAL_MORTALITY",
+            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
+            "LEFT AGAINST MEDICAL ADVI": "Other",
+            "LONG TERM CARE HOSPITAL": "Other Hospital",
+            "OTHER FACILITY": "Other External",
+            "REHAB/DISTINCT PART HOSP": "Rehabilitation",
+            "SHORT TERM HOSPITAL": "Other Hospital",
+            "SNF": "Skilled Nursing Facility",
+            "SNF-MEDICAID ONLY CERTIF": "Skilled Nursing Facility",
+        }
         self._icustay_key = "ICUSTAY_ID"
         self._hadm_key = "HADM_ID"
         self._patient_key = "SUBJECT_ID"
@@ -337,6 +357,8 @@ class MIMICIII(EHR):
             & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
             & (icustays["DISCHARGE_LOCATION"] == "Death")
         )
+        icustays["DISCHARGE_LOCATION"] = icustays["DISCHARGE_LOCATION"].map(self.disch_map_dict)
+
         icustays.rename(columns={"DISCHARGE_LOCATION": "HOS_DISCHARGE_LOCATION"}, inplace=True)
 
         icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
