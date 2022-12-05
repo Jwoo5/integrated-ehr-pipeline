@@ -170,7 +170,7 @@ class MIMICIV(EHR):
             }
 
         self.disch_map_dict = {
-            "ACUTE_HOSPITAL": "Other Hospital",
+            "ACUTE HOSPITAL": "Other Hospital",
             "AGAINST ADVICE": "Other",
             "ASSISTED LIVING": "Other External",
             "CHRONIC/LONG TERM ACUTE CARE": "Other Hospital",
@@ -178,12 +178,12 @@ class MIMICIV(EHR):
             "HOME": "Home",
             "HOME HEALTH CARE": "Home",
             "HOSPICE": "Home",
-            "IN_HOSPITAL_MORTALITY": "IN_HOSPITAL_MORTALITY",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
             "OTHER FACILITY": "Other External",
             "PSYCH FACILITY": "Other Hospital",
             "REHAB": "Rehabilitation",
             "SKILLED NURSING FACILITY": "Skilled Nursing Facility",
+            "Death": "Death",
         }
 
         self._icustay_key = "stay_id"

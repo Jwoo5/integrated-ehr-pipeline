@@ -214,8 +214,7 @@ class MIMICIII(EHR):
             "HOME WITH HOME IV PROVIDR": "Home",
             "HOSPICE-HOME": "Home",
             "HOSPICE-MEDICAL FACILITY": "Other Hospital",
-            "ICF (Intermeditate care facility)": "Other Hospital",
-            "IN_HOSPITAL_MORTALITY": "IN_HOSPITAL_MORTALITY",
+            "ICF": "Other Hospital",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
             "LEFT AGAINST MEDICAL ADVI": "Other",
             "LONG TERM CARE HOSPITAL": "Other Hospital",
@@ -224,6 +223,7 @@ class MIMICIII(EHR):
             "SHORT TERM HOSPITAL": "Other Hospital",
             "SNF": "Skilled Nursing Facility",
             "SNF-MEDICAID ONLY CERTIF": "Skilled Nursing Facility",
+            "Death": "Death",
         }
         self._icustay_key = "ICUSTAY_ID"
         self._hadm_key = "HADM_ID"
