@@ -35,7 +35,7 @@ def get_parser():
         metavar="D",
         help="percentage of data to use as validation and test set (between 0 and 0.5)",
     )
-    parser.add_argument("--seed", default=42, type=int, metavar="N", help="random seed")
+    parser.add_argument("--seed", default="42", type=str, metavar="N", help="random seed")
 
     # data
     parser.add_argument(

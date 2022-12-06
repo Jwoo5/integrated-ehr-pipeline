@@ -90,7 +90,7 @@ class EHR(object):
 
         self.dest = cfg.dest
         self.valid_percent = cfg.valid_percent
-        self.seed = cfg.seed
+        self.seed = [int(s) for s in cfg.seed.replace(' ','').split(",")]
         assert 0 <= cfg.valid_percent and cfg.valid_percent <= 0.5
 
         self.bins = cfg.bins
@@ -397,7 +397,7 @@ class EHR(object):
             cohorts = spark.createDataFrame(cohorts)
             print("Converted Cohort to Pyspark DataFrame")
         else:
-            logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(cohorts.count()))
+            logger.info("Start Preprocessing Tables")
             
 
         events_dfs = []
@@ -686,17 +686,17 @@ class EHR(object):
         logger.info("Total {} patients in the cohort are skipped due to few events".format(prev_len - len(cohorts)))
         cohorts.reset_index(drop=True, inplace=True)
         # Should consider pat_id for split
+        for seed in self.seed:
+            shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=seed)
+            cum_len = shuffled.cumsum()
 
-        shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=self.seed)
-        cum_len = shuffled.cumsum()
-
-        cohorts.loc[cohorts[self.patient_key].isin(
-            shuffled[cum_len < int(len(shuffled)*self.valid_percent)].index), 'split'] = 'test'
-        cohorts.loc[cohorts[self.patient_key].isin(
-            shuffled[(cum_len >= int(len(shuffled)*self.valid_percent)) 
-            & (cum_len < int(len(shuffled)*2*self.valid_percent))].index), 'split'] = 'valid'
-        cohorts.loc[cohorts[self.patient_key].isin(
-            shuffled[cum_len >= int(len(shuffled)*2*self.valid_percent)].index), 'split'] = 'train'
+            cohorts.loc[cohorts[self.patient_key].isin(
+                shuffled[cum_len < int(len(shuffled)*self.valid_percent)].index), f'split_{seed}'] = 'test'
+            cohorts.loc[cohorts[self.patient_key].isin(
+                shuffled[(cum_len >= int(len(shuffled)*self.valid_percent)) 
+                & (cum_len < int(len(shuffled)*2*self.valid_percent))].index), f'split_{seed}'] = 'valid'
+            cohorts.loc[cohorts[self.patient_key].isin(
+                shuffled[cum_len >= int(len(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
 
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
 

@@ -232,7 +232,7 @@ class MIMICIV(EHR):
             ]
 
         self.disch_map_dict = {
-            "ACUTE_HOSPITAL": "Other Hospital",
+            "ACUTE HOSPITAL": "Other Hospital",
             "AGAINST ADVICE": "Other",
             "ASSISTED LIVING": "Other External",
             "CHRONIC/LONG TERM ACUTE CARE": "Other Hospital",
@@ -240,12 +240,12 @@ class MIMICIV(EHR):
             "HOME": "Home",
             "HOME HEALTH CARE": "Home",
             "HOSPICE": "Home",
-            "IN_HOSPITAL_MORTALITY": "IN_HOSPITAL_MORTALITY",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
             "OTHER FACILITY": "Other External",
             "PSYCH FACILITY": "Other Hospital",
             "REHAB": "Rehabilitation",
             "SKILLED NURSING FACILITY": "Skilled Nursing Facility",
+            "Death": "Death",
         }
 
         self._icustay_key = "stay_id"
@@ -437,6 +437,7 @@ class MIMICIV(EHR):
         table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
 
         merge = cohorts.join(table, on=self.hadm_key, how="inner")
+        merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
 
         # Filter Dialysis at here to use abs timestamp & agg by patient_key
         # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
@@ -469,10 +470,10 @@ class MIMICIV(EHR):
             dialysis = ce.union(ie).union(pe)
             dialysis = dialysis.groupby(self.patient_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
             merge = merge.join(dialysis, on=self.patient_key, how="left")
+            # Only leave events with no dialysis / before first dialysis
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
 
-        merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
         merge = (
             merge.withColumn(
                 timestamp,
@@ -488,10 +489,8 @@ class MIMICIV(EHR):
 
         else:
             merge = merge.filter(
-                ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
-                    ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp)).filter(
-                        F.col("OUTTIME") >= F.col(timestamp)
-                )
+                ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
+            ).filter(((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
 
         # Average value of events
         value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
