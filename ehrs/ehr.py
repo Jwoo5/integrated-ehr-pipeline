@@ -661,7 +661,7 @@ class EHR(object):
         f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
         ehr_g = f.create_group("ehr")
         
-        if isinstance(cohorts, spark.sql.dataframe.DataFrame):
+        if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
         cohorts[['hi_start', 'fl_start', 'time']] = None
         cohorts.reset_index(inplace=True, drop=True)
