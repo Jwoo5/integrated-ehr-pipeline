@@ -243,7 +243,7 @@ class MIMICIII(EHR):
 
     def prepare_tasks(self, cohorts, spark, cached=False):
         if cohorts is None and cached:
-            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
                 return labeled_cohorts
 
@@ -271,8 +271,6 @@ class MIMICIII(EHR):
 
             # labeled_cohorts = labeled_cohorts.drop(columns=["ICD9_CODE"])
 
-            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
-
             logger.info("Done preparing diagnosis prediction for the given cohorts, Cohort Numbers: {}".format(len(labeled_cohorts)))
 
         if self.bilirubin or self.platelets or self.creatinine:
@@ -296,7 +294,9 @@ class MIMICIII(EHR):
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
-
+        if not isinstance(labeled_cohorts, pd.DataFrame):
+            labeled_cohorts = labeled_cohorts.toPandas()
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
         return labeled_cohorts
 
 

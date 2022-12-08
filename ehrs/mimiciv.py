@@ -204,9 +204,8 @@ class MIMICIV(EHR):
 
     def prepare_tasks(self, cohorts, spark, cached=False):
         if cached:
-            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
-                self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
@@ -263,6 +262,11 @@ class MIMICIV(EHR):
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
+        
+        if not isinstance(labeled_cohorts, pd.DataFrame):
+            labeled_cohorts = labeled_cohorts.toPandas()
+        
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
         return labeled_cohorts
 

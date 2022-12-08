@@ -102,9 +102,8 @@ class eICU(EHR):
 
     def prepare_tasks(self, cohorts, spark, cached=False):
         if cohorts is None and cached:
-            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled.dx")
+            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
             if labeled_cohorts is not None:
-                self.labeled_cohorts = labeled_cohorts
                 return labeled_cohorts
 
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
@@ -128,10 +127,9 @@ class eICU(EHR):
             )
             labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
 
-            self.labeled_cohorts = labeled_cohorts
-            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-            logger.info("Done preparing diagnosis prediction for the given cohorts")
+        logger.info("Done preparing diagnosis prediction for the given cohorts")
 
         return labeled_cohorts
 
