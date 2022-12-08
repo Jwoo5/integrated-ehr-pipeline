@@ -110,7 +110,7 @@ class MIMICIII(EHR):
             },
         ]
 
-        if self.creatinine or self.bilirubin or self.platelets:
+        if self.creatinine or self.bilirubin or self.platelets or self.crp:
             self.task_itemids = {
                 "creatinine": {
                     "fname": "LABEVENTS" + self.ext,
@@ -138,6 +138,15 @@ class MIMICIII(EHR):
                     "code": ["ITEMID"],
                     "value": ["VALUENUM"],
                     "itemid": [51265]
+                },
+                "crp": {
+                    "fname": "LABEVENTS" + self.ext,
+                    "timestamp": "CHARTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "FLAG"],
+                    "code": ["ITEMID"],
+                    "value": ["VALUENUM"],
+                    "itemid": [50889]
                 },
                 "dialysis": {
                     "tables": {
@@ -273,7 +282,7 @@ class MIMICIII(EHR):
 
             logger.info("Done preparing diagnosis prediction for the given cohorts, Cohort Numbers: {}".format(len(labeled_cohorts)))
 
-        if self.bilirubin or self.platelets or self.creatinine:
+        if self.bilirubin or self.platelets or self.creatinine or self.crp:
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
             )
@@ -289,11 +298,14 @@ class MIMICIII(EHR):
             if self.creatinine:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
 
+            if self.crp:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "crp", spark)
             # labeled_cohorts = labeled_cohorts.toPandas()
 
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
+        
         if not isinstance(labeled_cohorts, pd.DataFrame):
             labeled_cohorts = labeled_cohorts.toPandas()
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
@@ -439,7 +451,11 @@ class MIMICIII(EHR):
             merge = merge.join(dialysis, on=self.patient_key, how="left")
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
-            
+
+        elif task == 'crp':
+            # Unify units (mg/L, mg/dL)
+            merge.withColumn("VALUENUM", F.when(merge.VALUEUOM == 'mg/L', merge.VALUENUM).otherwise(merge.VALUENUM*10))
+
         if timeoffsetunit == "abs":
             merge = (
                 merge.withColumn(
@@ -481,6 +497,15 @@ class MIMICIII(EHR):
                         (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
                             (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
                                 value_agg.avg_value >= 5, 4)
+                )
+
+        elif task == 'crp':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 50, 0).when(
+                    (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 1).when(
+                        (value_agg.avg_value >= 100) & (value_agg.avg_value < 200), 2).when(
+                            (value_agg.avg_value >= 200) & (value_agg.avg_value < 400), 3).when(
+                                value_agg.avg_value >= 400, 4)
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")

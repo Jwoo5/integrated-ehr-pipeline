@@ -107,7 +107,7 @@ class MIMICIV(EHR):
             },
         ]
 
-        if self.creatinine or self.bilirubin or self.platelets:
+        if self.creatinine or self.bilirubin or self.platelets or self.crp:
             self.task_itemids = {
                 "creatinine": {
                     "fname": "hosp/labevents" + self.ext,
@@ -135,6 +135,15 @@ class MIMICIV(EHR):
                     "code": ["itemid"],
                     "value": ["valuenum"],
                     "itemid": [51265]
+                },
+                "crp": {
+                    "fname": "hosp/labevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "code": ["itemid"],
+                    "value": ["valuenum"],
+                    "itemid": [50889, 51652]
                 },
                 "dialysis": {
                     "tables": {
@@ -235,13 +244,9 @@ class MIMICIV(EHR):
 
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
-
-            self.labeled_cohorts = labeled_cohorts
-            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.dx")
-
             logger.info("Done preparing diagnosis prediction for the given cohorts")
 
-        if self.bilirubin or self.platelets or self.creatinine:
+        if self.bilirubin or self.platelets or self.creatinine or self.crp:
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
             )
@@ -256,6 +261,9 @@ class MIMICIV(EHR):
 
             if self.creatinine:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
+            
+            if self.crp:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "crp", spark)
 
             # labeled_cohorts = labeled_cohorts.toPandas()
 
@@ -372,11 +380,11 @@ class MIMICIV(EHR):
         excludes = self.task_itemids[task]["exclude"]
         code = self.task_itemids[task]["code"][0]
         value = self.task_itemids[task]["value"][0]
-        itemid = self.task_itemids[task]["itemid"][0]
+        itemid = self.task_itemids[task]["itemid"]
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
-        table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
+        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
 
         merge = cohorts.join(table, on=self.hadm_key, how="inner")
         merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
@@ -456,6 +464,16 @@ class MIMICIV(EHR):
                         (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
                             (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
                                 value_agg.avg_value >= 5, 4)
+                )
+
+        elif task == 'crp':
+            # NOTE: unit is mg/L
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 50, 0).when(
+                    (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 1).when(
+                        (value_agg.avg_value >= 100) & (value_agg.avg_value < 200), 2).when(
+                            (value_agg.avg_value >= 200) & (value_agg.avg_value < 400), 3).when(
+                                value_agg.avg_value >= 400, 4)
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
