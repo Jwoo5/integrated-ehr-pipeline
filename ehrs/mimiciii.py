@@ -110,7 +110,7 @@ class MIMICIII(EHR):
             },
         ]
 
-        if self.creatinine or self.bilirubin or self.platelets or self.crp:
+        if self.creatinine or self.bilirubin or self.platelets or self.wbc:
             self.task_itemids = {
                 "creatinine": {
                     "fname": "LABEVENTS" + self.ext,
@@ -139,14 +139,14 @@ class MIMICIII(EHR):
                     "value": ["VALUENUM"],
                     "itemid": [51265]
                 },
-                "crp": {
+                "wbc": {
                     "fname": "LABEVENTS" + self.ext,
                     "timestamp": "CHARTTIME",
                     "timeoffsetunit": "abs",
                     "exclude": ["ROW_ID", "SUBJECT_ID", "VALUE", "FLAG"],
                     "code": ["ITEMID"],
                     "value": ["VALUENUM"],
-                    "itemid": [50889]
+                    "itemid": [51300, 51301]
                 },
                 "dialysis": {
                     "tables": {
@@ -282,7 +282,7 @@ class MIMICIII(EHR):
 
             logger.info("Done preparing diagnosis prediction for the given cohorts, Cohort Numbers: {}".format(len(labeled_cohorts)))
 
-        if self.bilirubin or self.platelets or self.creatinine or self.crp:
+        if self.bilirubin or self.platelets or self.creatinine or self.wbc:
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
             )
@@ -298,8 +298,8 @@ class MIMICIII(EHR):
             if self.creatinine:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
 
-            if self.crp:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "crp", spark)
+            if self.wbc:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
             # labeled_cohorts = labeled_cohorts.toPandas()
 
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
@@ -386,11 +386,11 @@ class MIMICIII(EHR):
         excludes = self.task_itemids[task]["exclude"]
         code = self.task_itemids[task]["code"][0]
         value = self.task_itemids[task]["value"][0]
-        itemid = self.task_itemids[task]["itemid"][0]
+        itemid = self.task_itemids[task]["itemid"]
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
-        table = table.filter(F.col(code) == itemid).filter(F.col(value).isNotNull())
+        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
 
         merge = cohorts.join(table, on=self.hadm_key, how="inner")
 
@@ -452,10 +452,6 @@ class MIMICIII(EHR):
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
 
-        elif task == 'crp':
-            # Unify units (mg/L, mg/dL)
-            merge.withColumn("VALUENUM", F.when(merge.VALUEUOM == 'mg/L', merge.VALUENUM).otherwise(merge.VALUENUM*10))
-
         if timeoffsetunit == "abs":
             merge = (
                 merge.withColumn(
@@ -499,13 +495,11 @@ class MIMICIII(EHR):
                                 value_agg.avg_value >= 5, 4)
                 )
 
-        elif task == 'crp':
+        elif task == 'wbc':
             value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 50, 0).when(
-                    (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 1).when(
-                        (value_agg.avg_value >= 100) & (value_agg.avg_value < 200), 2).when(
-                            (value_agg.avg_value >= 200) & (value_agg.avg_value < 400), 3).when(
-                                value_agg.avg_value >= 400, 4)
+                F.when(value_agg.avg_value < 4, 0).when(
+                    (value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1).when(
+                        (value_agg.avg_value > 12), 2)
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")

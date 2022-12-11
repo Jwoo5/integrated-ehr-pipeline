@@ -107,7 +107,7 @@ class MIMICIV(EHR):
             },
         ]
 
-        if self.creatinine or self.bilirubin or self.platelets or self.crp:
+        if self.creatinine or self.bilirubin or self.platelets or self.wbc:
             self.task_itemids = {
                 "creatinine": {
                     "fname": "hosp/labevents" + self.ext,
@@ -136,14 +136,14 @@ class MIMICIV(EHR):
                     "value": ["valuenum"],
                     "itemid": [51265]
                 },
-                "crp": {
+                "wbc": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
                     "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
                     "code": ["itemid"],
                     "value": ["valuenum"],
-                    "itemid": [50889, 51652]
+                    "itemid": [51300, 51301, 51755]
                 },
                 "dialysis": {
                     "tables": {
@@ -246,7 +246,7 @@ class MIMICIV(EHR):
 
             logger.info("Done preparing diagnosis prediction for the given cohorts")
 
-        if self.bilirubin or self.platelets or self.creatinine or self.crp:
+        if self.bilirubin or self.platelets or self.creatinine or self.wbc:
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
             )
@@ -262,8 +262,8 @@ class MIMICIV(EHR):
             if self.creatinine:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
             
-            if self.crp:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "crp", spark)
+            if self.wbc:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
 
             # labeled_cohorts = labeled_cohorts.toPandas()
 
@@ -466,14 +466,12 @@ class MIMICIV(EHR):
                                 value_agg.avg_value >= 5, 4)
                 )
 
-        elif task == 'crp':
+        elif task == 'wbc':
             # NOTE: unit is mg/L
             value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 50, 0).when(
-                    (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 1).when(
-                        (value_agg.avg_value >= 100) & (value_agg.avg_value < 200), 2).when(
-                            (value_agg.avg_value >= 200) & (value_agg.avg_value < 400), 3).when(
-                                value_agg.avg_value >= 400, 4)
+                F.when(value_agg.avg_value < 4, 0).when(
+                    (value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1).when(
+                        (value_agg.avg_value > 12), 2)
                 )
 
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
