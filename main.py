@@ -36,6 +36,7 @@ def get_parser():
         help="percentage of data to use as validation and test set (between 0 and 0.5)",
     )
     parser.add_argument("--seed", default="42", type=str, metavar="N", help="random seed")
+    parser.add_argument("--ds_seed", default=10, type=int, help="random seed for data sampling")
 
     # data
     parser.add_argument(
@@ -87,6 +88,18 @@ def get_parser():
         type=int,
         default=5,
         help="min event size to skip small samples",
+    )
+    parser.add_argument(
+        "--min_ds_event_size",
+        type=int,
+        default=50,
+        help="min event size to skip small samples for data sampling",
+    )
+    parser.add_argument(
+        "--max_ds_event_size",
+        type=int,
+        default=250,
+        help="max event size to crop to for data sampling",
     )
     parser.add_argument(
         "--min_age", type=int, default=18, help="min age to skip too young patients"
@@ -186,6 +199,15 @@ def get_parser():
 
     parser.add_argument(
         '--num_threads', type=int, default=8, help='number of threads to use'
+    )
+
+    parser.add_argument(
+        '--data_sampling', action='store_true',
+        help='whether to create data sample or original data'
+    )
+    parser.add_argument(
+        '--ds_overlap', type=int, default=5,
+        help="overlap size for data sampling"
     )
     return parser
 

@@ -57,6 +57,19 @@ class EHR(object):
             self.min_event_size,
             self.max_event_size,
         )
+        self.max_ds_event_size = (
+            cfg.max_ds_event_size if cfg.max_ds_event_size is not None else sys.maxsize
+        )
+        self.min_ds_event_size = (
+            cfg.min_ds_event_size if cfg.min_ds_event_size is not None else 1
+        )
+        assert self.min_ds_event_size > 0, (
+            "--min_ds_event_size could not be negative or zero", self.min_ds_event_size
+        )
+        assert self.min_ds_event_size <= self.max_ds_event_size, (
+            self.min_ds_event_size,
+            self.max_ds_event_size,
+        )
 
         self.max_event_token_len = cfg.max_event_token_len
         self.max_patient_token_len = cfg.max_patient_token_len
@@ -92,6 +105,7 @@ class EHR(object):
         self.valid_percent = cfg.valid_percent
         self.seed = [int(s) for s in cfg.seed.replace(' ','').split(",")]
         assert 0 <= cfg.valid_percent and cfg.valid_percent <= 0.5
+        self.ds_seed = cfg.ds_seed
 
         self.bins = cfg.bins
 
@@ -111,6 +125,9 @@ class EHR(object):
 
         self.others_dpe_id = 0
 
+        self.data_sampling = cfg.data_sampling
+        self.ds_overlap = cfg.ds_overlap
+
         self._icustay_fname = None
         self._patient_fname = None
         self._admission_fname  = None
@@ -118,6 +135,11 @@ class EHR(object):
 
         self._icustay_key = None
         self._hadm_key = None
+
+        if self.data_sampling:
+            self.ds_data_dir = os.path.join(self.cache_dir, cfg.ehr, "data_samples")
+            if not os.path.exists(self.ds_data_dir):
+                os.makedirs(self.ds_data_dir)
 
 
     @property
@@ -434,7 +456,8 @@ class EHR(object):
             else:
                 raise NotImplementedError()
 
-            events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
+            if not self.data_sampling:
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
@@ -528,33 +551,22 @@ class EHR(object):
                     .withColumn("DPES", F.col("tmp.DPES"))
                     .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
             )
+            # if self.data_sampling:
+            #     events = events.join(
+            #         cohorts.select(self.hadm_key, self.icustay_key, self.determine_first_icu),
+            #         on=self.icustay_key, how="left"
+            #     )
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
 
 
     def make_input(self, cohorts, events, spark):
-        @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
-        def _make_input(events):
-            # Actually, this function does not have to return anything.
-            # However, return something(TIME) is required to satisfy the PySpark requirements.
-            df = events.sort_values("TIME")
-            flatten_cut_idx = -1
-            # Consider SEP
-            flatten_lens = np.cumsum(df["INPUTS"].str.len()+1).values
-            event_length = len(df)
+        def make_hi_fl(df, flatten_lens, ds_idx=1):
 
-            if flatten_lens[-1] > self.max_patient_token_len-1:
-                # Consider CLS token at first of the flatten input
-                flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+1)
-                flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[flatten_cut_idx+1:]
-                event_length = len(flatten_lens)
-            
-            # Event length should not be longer than max_event_size
-            event_length = min(event_length, self.max_event_size)
-            df = df.iloc[-event_length:]
-
-            if len(df)<=self.min_event_size:
-                return events["TIME"].to_frame()
+            if len(df)<=self.min_event_size: #TODO: data sampling hi/fl start
+                return
+            hi_start = 0
+            fl_start = 0
 
             make_hi = lambda cls_id, sep_id, iterable: [[cls_id] + list(i) + [sep_id] for i in iterable]
             make_fl = lambda cls_id, sep_id, iterable: [cls_id] + list(chain(*[list(i) + [sep_id] for i in iterable]))
@@ -581,52 +593,144 @@ class EHR(object):
             fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
             
             stay_id = df[self.icustay_key].values[0]
+            # hadm_id = df[self.hadm_key].values[0]
             # Create caches (cannot write to hdf5 directly with pyspark)
             data = {
                 "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
                 "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
                 "time": df["TIME"].values,
             }
-            with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
-                pickle.dump(data, f)
+            if not self.data_sampling:
+                with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
+                    pickle.dump(data, f)
+            else:
+                with open(os.path.join(self.ds_data_dir, f"{stay_id}_{ds_idx}.pkl"), "wb") as f:
+                    pickle.dump(data, f)
+            
+            return
+
+        @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
+        def _make_input(events):
+            # Actually, this function does not have to return anything.
+            # However, return something(TIME) is required to satisfy the PySpark requirements.
+            df = events.sort_values("TIME")
+            flatten_cut_idx = -1
+            # Consider SEP
+            flatten_lens = np.cumsum(df["INPUTS"].str.len()+1).values
+            event_length = len(df)
+
+            if flatten_lens[-1] > self.max_patient_token_len-1:
+                # Consider CLS token at first of the flatten input
+                flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+1)
+                flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[flatten_cut_idx+1:]
+                event_length = len(flatten_lens)
+            
+            # Event length should not be longer than max_event_size
+            event_length = min(event_length, self.max_event_size)
+            df = df.iloc[-event_length:]
+
+            make_hi_fl(df, flatten_lens)
+
             return events["TIME"].to_frame()
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+        @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
+        def _make_data_samples(events):
+            if len(events) < self.min_ds_event_size:
+                return events["TIME"].to_frame()
+            
+            df = events.sort_values("TIME")
+            
+            left_events = len(df)
+            start_idx = 0
+            end_idx = 0
+            ds_idx = 0
+            total = dict()
 
-        events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
+            df = df.reset_index(drop=True)
+            # print(df)
+            # print("")
+
+            # total['total_events'] = left_events
+            # total['sample'] = []
+
+            while self.min_ds_event_size <= left_events:
+                sampled_events_cnt = random.randint(self.min_ds_event_size, self.max_ds_event_size)
+                sampled_events_cnt = min(sampled_events_cnt, left_events)
+                end_idx = start_idx + sampled_events_cnt - 1
+
+                # Create Sampled Dataframe
+                sampled_df = df.iloc[start_idx:end_idx+1].copy()
+                
+                flatten_cut_idx = -1
+                # Consider SEP
+                flatten_lens = np.cumsum(sampled_df["INPUTS"].str.len()+1).values
+
+                if flatten_lens[-1] > self.max_patient_token_len-1:
+                    # Consider CLS token at first of the flatten input
+                    flatten_cut_idx = np.searchsorted(flatten_lens, self.max_patient_token_len-1, side="right")
+                    flatten_lens = flatten_lens[:flatten_cut_idx]
+                    sampled_events_cnt = len(flatten_lens)
+                    end_idx = start_idx + sampled_events_cnt - 1
+                    
+                    sampled_df = df.iloc[start_idx:end_idx+1].copy()
+
+                make_hi_fl(sampled_df, flatten_lens, ds_idx)
+
+                # total['sample'].append({'idx': str(start_idx)+'-'+str(end_idx), 'len': len(sampled_df), 'left': left_events})
+
+                start_idx = end_idx - (end_idx - start_idx + 1) // self.ds_overlap + 1
+                left_events = len(df) - start_idx
+                ds_idx += 1
+            
+            return events["TIME"].to_frame()
+
+        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+
+        if not self.data_sampling:
+            events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
+        else:
+            print("Start data sampling")
+            import random
+            random.seed(self.ds_seed)
+            events.groupBy(self.icustay_key).apply(_make_data_samples).write.mode("overwrite").format("noop").save()
 
         logger.info("Finish Data Preprocessing. Start to write to hdf5")
 
-        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
-        ehr_g = f.create_group("ehr")
+        if not self.data_sampling:
 
-        active_stay_ids = []
+            f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
+            ehr_g = f.create_group("ehr")
 
-        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
-            stay_id = stay_id_file.split(".")[0]
-            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
-                data = pickle.load(f)
-            stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('time', data = data['time'], dtype='i')
-            active_stay_ids.append(int(stay_id))
+            active_stay_ids = []
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        # Drop patients with few events
+            for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
+                stay_id = stay_id_file.split(".")[0]
+                ext = stay_id_file.split(".")[1]
+                if ext != "pkl":
+                    continue
+                with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
+                    data = pickle.load(f)
+                stay_g = ehr_g.create_group(str(stay_id))
+                stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
+                stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
+                stay_g.create_dataset('time', data = data['time'], dtype='i')
+                active_stay_ids.append(int(stay_id))
 
-        if not isinstance(cohorts, pd.DataFrame):
-            cohorts = cohorts.toPandas()
-            print(cohorts)
+            # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+            # Drop patients with few events
 
-        logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
-        cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
+            if not isinstance(cohorts, pd.DataFrame):
+                cohorts = cohorts.toPandas()
+                print(cohorts)
 
-        # Should consider pat_id for split
-        for seed in self.seed:
-            shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=seed)
-            cum_len = shuffled.cumsum()
+            logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
+            cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
+
+            # Should consider pat_id for split
+            for seed in self.seed:
+                shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=seed)
+                cum_len = shuffled.cumsum()
 
             cohorts.loc[cohorts[self.patient_key].isin(
                 shuffled[cum_len < int(sum(shuffled)*self.valid_percent)].index), f'split_{seed}'] = 'test'
@@ -636,23 +740,37 @@ class EHR(object):
             cohorts.loc[cohorts[self.patient_key].isin(
                 shuffled[cum_len >= int(sum(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
 
-        cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
+            cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
 
-        # Record corhots df to hdf5
-        for _, row in cohorts.iterrows():
-            group = ehr_g[str(row[self.icustay_key])]
-            for col in cohorts.columns:
-                if col in ["INTIME", "OUTTIME"] or isinstance(row[col], (pd.Timestamp, pd.Timedelta)):
-                    continue
-                group.attrs[col] = row[col]
-        f.close()
-        logger.info("Done encoding events.")
+            # Record corhots df to hdf5
+            for _, row in cohorts.iterrows():
+                group = ehr_g[str(row[self.icustay_key])]
+                for col in cohorts.columns:
+                    if col in ["INTIME", "OUTTIME"] or isinstance(row[col], (pd.Timestamp, pd.Timedelta)):
+                        continue
+                    group.attrs[col] = row[col]
+            f.close()
+            logger.info("Done encoding events.")
+
+        else:
+
+            file_ids = []
+
+            for stay_id_file in tqdm(os.listdir(os.path.join(self.ds_data_dir))):
+
+                file_ids.append(stay_id_file)
+
+            ds_df = pd.DataFrame(file_ids, columns=['file_id'])
+            ds_df.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.samples.csv'), index=False)
 
         return
 
     def run_pipeline(self, spark) -> None:
-        cohorts = self.build_cohorts(cached=self.cache)
-        labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
+        if not self.data_sampling:
+            cohorts = self.build_cohorts(cached=self.cache)
+            labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
+        else:
+            labeled_cohorts = self.load_cohorts(cached=self.cache)
         events = self.process_tables(labeled_cohorts, spark)
         self.make_input(labeled_cohorts, events, spark)
 
@@ -709,6 +827,10 @@ class EHR(object):
             if item not in icustays.columns.to_list():
                 return False
         return True
+
+    def load_cohorts(self, cached=False):
+        
+        raise NotImplementedError()
 
     def save_to_cache(self, f, fname, use_pickle=False) -> None:
         if use_pickle:
