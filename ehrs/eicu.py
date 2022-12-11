@@ -84,6 +84,18 @@ class eICU(EHR):
             },
         ]
 
+        self.disch_map_dict = {
+            "Home": "Home",
+            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
+            "Nursing Home": "Other",
+            "Other": "Other",
+            "Other External": "Other",
+            "Other Hospital": "Other",
+            "Rehabilitation": "Rehabilitation",
+            "Skilled Nursing Facility": "Skilled Nursing Facility",
+            "Death" : "Death"
+        }
+
         self._icustay_key = "patientunitstayid"
         self._hadm_key = "patienthealthsystemstayid"
         self._patient_key = "uniquepid"
@@ -158,7 +170,7 @@ class eICU(EHR):
         icustays.rename(columns={"hospitaldischargeoffset": "DISCHTIME"}, inplace=True)
 
         icustays["IN_ICU_MORTALITY"] = icustays["unitdischargestatus"] == "Expired"
-
+        icustays["hospitaldischargelocation"] = icustays["hospitaldischargelocation"].map(self.disch_map_dict)
         icustays.rename(columns={
             "hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"
         }, inplace=True)

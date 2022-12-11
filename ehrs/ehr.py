@@ -357,6 +357,7 @@ class EHR(object):
         # in: cohorts, sparksession
         # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
         if isinstance(cohorts, pd.DataFrame):
+            cohorts = cohorts[[self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"]]
             logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
             cohorts = spark.createDataFrame(cohorts)
             print("Converted Cohort to Pyspark DataFrame")

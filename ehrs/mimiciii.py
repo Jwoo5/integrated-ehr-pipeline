@@ -282,6 +282,8 @@ class MIMICIII(EHR):
 
             logger.info("Done preparing diagnosis prediction for the given cohorts, Cohort Numbers: {}".format(len(labeled_cohorts)))
 
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
+
         if self.bilirubin or self.platelets or self.creatinine or self.wbc:
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
@@ -306,9 +308,7 @@ class MIMICIII(EHR):
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
         
-        if not isinstance(labeled_cohorts, pd.DataFrame):
-            labeled_cohorts = labeled_cohorts.toPandas()
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
+        # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
         return labeled_cohorts
 
 
