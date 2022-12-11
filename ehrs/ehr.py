@@ -634,10 +634,6 @@ class EHR(object):
             hi_type = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_type])
             hi_dpe = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_dpe])
 
-            fl_input = np.pad(fl_input, (0, self.max_patient_token_len - len(fl_input)), mode='constant')
-            fl_type = np.pad(fl_type, (0, self.max_patient_token_len - len(fl_type)), mode='constant')
-            fl_dpe = np.pad(fl_dpe, (0, self.max_patient_token_len - len(fl_dpe)), mode='constant')
-            
             stay_id = df[self.icustay_key].values[0]
             # Create caches (cannot write to hdf5 directly with pyspark)
             data = {
@@ -664,30 +660,12 @@ class EHR(object):
         if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
         cohorts[['hi_start', 'fl_start', 'time']] = None
-        cohorts.reset_index(inplace=True, drop=True)
-        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
-            stay_id = stay_id_file.split(".")[0]
-            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
-                data = pickle.load(f)
-            stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
-            stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
-            stay_g.create_dataset('time', data = data['time'], dtype='i')
 
-            # If want to acceleate keys split in datasets, read df selectively
-            corresponding_idx = cohorts.index[cohorts[self.icustay_key]==int(stay_id)][0]
-            cohorts.at[corresponding_idx, 'hi_start'] = data['hi_start']
-            cohorts.at[corresponding_idx, 'fl_start'] = data['fl_start']
-            cohorts.at[corresponding_idx, 'time'] = data['time']
-
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        # Drop patients with few events
-        prev_len = len(cohorts)
-        cohorts = cohorts.dropna(subset=['hi_start', 'fl_start', 'time'], how='any')
-        logger.info("Total {} patients in the cohort are skipped due to few events".format(prev_len - len(cohorts)))
+        active_stay_ids = [int(i.split(".")[0]) for i in os.listdir(os.path.join(self.cache_dir, self.ehr_name))]        
+        logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
+        cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
         cohorts.reset_index(drop=True, inplace=True)
+
         # Should consider pat_id for split
         for seed in self.seed:
             shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=seed)
@@ -701,15 +679,34 @@ class EHR(object):
             cohorts.loc[cohorts[self.patient_key].isin(
                 shuffled[cum_len >= int(len(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
 
+        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
+            stay_id = stay_id_file.split(".")[0]
+            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
+                data = pickle.load(f)
+            stay_g = ehr_g.create_group(str(stay_id))
+            stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
+            stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
+            stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
+            stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
+            stay_g.create_dataset('time', data = data['time'], dtype='i')
+
+            
+            corresponding_idx = cohorts.index[cohorts[self.icustay_key]==int(stay_id)][0]
+            row = cohorts.loc[corresponding_idx]
+            for col in cohorts.columns:
+                if col in ["INTIME", "hi_start", "fl_start", "time"]:
+                    continue
+                stay_g.attrs[col] = row[col]
+
+            # If want to acceleate keys split in datasets, read df selectively
+            cohorts.at[corresponding_idx, 'hi_start'] = str(list(data['hi_start']))
+            cohorts.at[corresponding_idx, 'fl_start'] = str(list(data['fl_start']))
+            cohorts.at[corresponding_idx, 'time'] = str(list(data['time']))
+
+        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # Drop patients with few events
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
 
-        # Record corhots df to hdf5
-        for _, row in cohorts.iterrows():
-            group = ehr_g[str(row[self.icustay_key])]
-            for col in cohorts.columns:
-                if col in ["INTIME", "OUTTIME"] or isinstance(row[col], (pd.Timestamp, pd.Timedelta)):
-                    continue
-                group.attrs[col] = row[col]
         f.close()
         logger.info("Done encoding events.")
 
