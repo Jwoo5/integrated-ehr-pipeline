@@ -158,8 +158,8 @@ def get_parser():
         help="whether to include platelets task or not"
     )
     parser.add_argument(
-        "--crp", action='store_true',
-        help="whether to include c-reactive protein task or not"
+        "--wbc", action='store_true',
+        help="whether to include blood white blood cell count task or not"
     )
 
 

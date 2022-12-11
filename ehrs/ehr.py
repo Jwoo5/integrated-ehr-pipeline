@@ -84,7 +84,7 @@ class EHR(object):
         self.creatinine = cfg.creatinine
         self.bilirubin = cfg.bilirubin
         self.platelets = cfg.platelets
-        self.crp = cfg.crp
+        self.wbc = cfg.wbc
 
         self.chunk_size = cfg.chunk_size
 
