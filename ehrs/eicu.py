@@ -5,6 +5,7 @@ from collections import Counter
 import pandas as pd
 import glob
 import pyspark.sql.functions as F
+import numpy as np
 
 from ehrs import register_ehr, EHR
 
@@ -162,6 +163,29 @@ class eICU(EHR):
         cohorts = super().build_cohorts(icustays, cached=cached)
 
         return cohorts
+
+    def load_cohorts(self, cached=False):
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+        icustays["INTIME"] = 0
+        icustays.rename(columns={"unitdischargeoffset": "OUTTIME"}, inplace=True)
+
+        icustays = icustays[[self.hadm_key, self.icustay_key, self.patient_key, "INTIME", "OUTTIME"]]
+
+        original_cohorts = pd.read_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'))
+        test_hadm_ids = np.array([])
+
+        for seed in [42, 43, 44, 45, 46]:
+            test_hadm_ids = np.append(test_hadm_ids, original_cohorts[original_cohorts[f'split_{seed}'] == 'test'][self.hadm_key].values)
+        test_hadm_ids = np.unique(test_hadm_ids).astype(int)
+
+        icustays = icustays[~icustays[self.hadm_key].isin(test_hadm_ids)]
+
+        self.icustays = icustays
+
+        self.save_to_cache(icustays, self.ehr_name + ".sampled.cohorts")
+        logger.info("Done preparing cohorts for data samples.")
+
+        return icustays
 
     def prepare_tasks(self, cohorts, spark, cached=False):
         if cohorts is None and cached:
