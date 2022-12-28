@@ -298,6 +298,9 @@ class MIMICIV(EHR):
         )
 
         icustays = icustays.merge(patients, on="subject_id", how="left")
+
+        icustays['start_year'] = icustays["anchor_year"] + (2013 - (icustays["anchor_year_group"].str.split(' - ').str[0]).astype(int))
+        
         icustays["AGE"] = (
             icustays["INTIME"].dt.year
             - icustays["anchor_year"]

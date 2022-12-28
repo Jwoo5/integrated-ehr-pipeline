@@ -218,18 +218,22 @@ class EHR(object):
             "Start labeling cohorts for predictive tasks."
         )
 
-        labeled_cohorts = cohorts[[
-            self.hadm_key,
-            self.icustay_key,
-            self.patient_key,
-            "readmission",
-            "LOS",
-            "INTIME",
-            "OUTTIME",
-            "DISCHTIME",
-            "IN_ICU_MORTALITY",
-            "HOS_DISCHARGE_LOCATION",
-        ]].copy()
+        column_pick = [
+                self.hadm_key,
+                self.icustay_key,
+                self.patient_key,
+                "readmission",
+                "LOS",
+                "INTIME",
+                "OUTTIME",
+                "DISCHTIME",
+                "IN_ICU_MORTALITY",
+                "HOS_DISCHARGE_LOCATION",
+            ]
+        if self.ehr_name == 'mimiciv':
+            column_pick.append("start_year")
+
+        labeled_cohorts = cohorts[column_pick].copy()
 
         # mortality prediction
         # if the discharge location of an icustay is 'Death'
@@ -357,7 +361,11 @@ class EHR(object):
         # in: cohorts, sparksession
         # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
         if isinstance(cohorts, pd.DataFrame):
-            cohorts = cohorts[[self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"]]
+            column_pick = [self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"]
+            if self.ehr_name == 'mimiciv':
+                column_pick.append("start_year")
+                
+            cohorts = cohorts[column_pick]
             logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
             cohorts = spark.createDataFrame(cohorts)
             print("Converted Cohort to Pyspark DataFrame")
@@ -405,8 +413,12 @@ class EHR(object):
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
 
             if infer_icustay_from_hadm_key:
+                column_pick = [self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"]
+                if self.ehr_name == 'mimiciv':
+                    column_pick.append("start_year")
+                    
                 events = events.join(
-                        cohorts.select(self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"),
+                        cohorts.select(*column_pick),
                         on=self.hadm_key, how="inner"
                     )
                 if table["timeoffsetunit"] =='abs':
@@ -424,7 +436,15 @@ class EHR(object):
                 events = events.join(cohorts.select(self.icustay_key), on=self.icustay_key, how='leftsemi')
 
             else:
-                events = events.join(cohorts.select(self.icustay_key, "INTIME", "OUTTIME"), on=self.icustay_key, how="inner")
+                column_pick = [self.icustay_key, "INTIME", "OUTTIME"]
+                if self.ehr_name == 'mimiciv':
+                    column_pick.append("start_year")
+
+                events = events.join(cohorts.select(*column_pick), on=self.icustay_key, how="inner")
+
+            # Filter out events before year 2013 to avoid duplicates with MIMIC-III data
+            if self.ehr_name == 'mimiciv':
+                events = events.filter(F.year(F.col(timestamp_key)) >= F.col("start_year"))
 
             if table["timeoffsetunit"] == 'abs':
                 events = events.withColumn("TIME", F.round((F.col(timestamp_key).cast("long") - F.col("INTIME").cast("long")) / 60))
@@ -436,7 +456,12 @@ class EHR(object):
 
             events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
 
-            events = events.drop("INTIME", "OUTTIME", self.hadm_key)
+            column_pick = ["INTIME", "OUTTIME", self.hadm_key]
+            # Drop "start_year" column before processing input columns
+            if self.ehr_name == 'mimiciv':
+                column_pick.append("start_year")
+
+            events = events.drop(*column_pick)
 
             if code_to_descriptions:
                 for col in code_to_descriptions.keys():
