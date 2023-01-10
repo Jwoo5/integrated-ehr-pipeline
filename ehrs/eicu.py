@@ -85,6 +85,56 @@ class eICU(EHR):
             },
         ]
 
+        if self.creatinine or self.bilirubin or self.platelets or self.wbc:
+            self.task_itemids = {
+                "creatinine": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["creatinine"]
+                },
+                "bilirubin": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["total bilirubin"]
+                },
+                "platelets": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ['platelets x 1000']
+                },
+                "wbc": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["WBC x 1000"]
+                },
+                "dialysis": {
+                        "fname": "treatment" + self.ext,
+                        "timestamp": "treatmentoffset",
+                        "timeoffsetunit": "min",
+                        "exclude": ["treatmentid"],
+                        "code": ["treatmentstring"],
+                        "value": [],
+                        "itemid": ["dialysis"]
+                        },
+                                
+                }
+        
         self.disch_map_dict = {
             "Home": "Home",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
