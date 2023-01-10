@@ -4,6 +4,7 @@ import treelib
 from collections import Counter
 import pandas as pd
 import glob
+import pyspark.sql.functions as F
 
 from ehrs import register_ehr, EHR
 
@@ -84,6 +85,94 @@ class eICU(EHR):
             },
         ]
 
+        if self.feature=='select':
+            extra_exclude_feature_dict ={
+                "lab" + self.ext: ['labtypeid', 'labresulttext', 'labmeasurenameinterface', 'labresultrevisedoffset'],
+                "medication"+ self.ext: ['drugivadmixture' 'frequency', 'loadingdose', 'prn'],
+                "infusionDrug"+ self.ext: ['patientweight', 'volumeoffluid', 'drugrate', 'drugamount'],
+                }
+            
+            for table in self.tables:
+                if table['fname'] in extra_exclude_feature_dict.keys():
+                    exclude_target_list = extra_exclude_feature_dict[table['fname']]
+                    table['exclude'].extend(exclude_target_list) 
+        
+        
+        if self.emb_type =='codebase':
+            feature_types_for_codebase_emb_dict ={
+                "lab" + self.ext : {
+                    'numeric_feat': ['labresult', 'labresulttext'],
+                    'categorical_feat':['labtypeid'],
+                    'code_feat':['labname']
+                },
+                "medication" + self.ext: {
+                    'numeric_feat': ['dosage'],
+                    'categorical_feat':['drugordercancelled', 'drugivadmixture'],
+                    'code_feat':['drugname']
+                },
+                "infusionDrug" + self.ext: {
+                    'numeric_feat': ['drugrate', 'infusionrate', 'drugamount', 'volumeoffluid', 'patientweight'],
+                    'categorical_feat':[],
+                    'code_feat':['drugname']
+                },
+            }
+
+            for table in self.tables:
+                if table['fname'] in feature_types_for_codebase_emb_dict.keys():
+                    feature_dict = feature_types_for_codebase_emb_dict[table['fname']]
+                    table.update(feature_dict) 
+                    
+        if self.creatinine or self.bilirubin or self.platelets or self.wbc:
+            self.task_itemids = {
+                "creatinine": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["creatinine"]
+                },
+                "bilirubin": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["total bilirubin"]
+                },
+                "platelets": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ['platelets x 1000']
+                },
+                "wbc": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["labtypeid", "labresulttext", "labmeasurenamesystem", "labmeasurenameinterface", "labresultrevisedoffset"],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["WBC x 1000"]
+                },
+                "dialysis": {
+                        "fname": "treatment" + self.ext,
+                        "timestamp": "treatmentoffset",
+                        "timeoffsetunit": "min",
+                        "exclude": ["treatmentid"],
+                        "code": ["treatmentstring"],
+                        "value": [],
+                        "itemid": ["dialysis"]
+                        },
+                                
+                }
+        
+        
         self.disch_map_dict = {
             "Home": "Home",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
@@ -124,7 +213,6 @@ class eICU(EHR):
             logger.info(
                 "Start labeling cohorts for diagnosis prediction."
             )
-
             str2cat = self.make_dx_mapping()
             dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
             dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
@@ -137,12 +225,42 @@ class eICU(EHR):
                 .agg(lambda x: list(set(x)))
                 .to_frame()
             )
+             
             labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
-
+            labeled_cohorts['diagnosis'] = labeled_cohorts['diagnosis'].apply(lambda x: [] if type(x)!=list else x)
+            # NaN case in diagnosis -> []
+            
+        logger.info("Done preparing diagnosis prediction for the given cohorts")
+        
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        logger.info("Done preparing diagnosis prediction for the given cohorts")
+        if self.bilirubin or self.platelets or self.creatinine or self.wbc:
+            logger.info(
+                "Start labeling cohorts for clinical task prediction."
+            )
+            
+            labeled_cohorts = spark.createDataFrame(labeled_cohorts)
+            
+            if self.bilirubin:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
 
+            if self.platelets:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+
+            if self.creatinine:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
+
+            if self.wbc:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
+            # labeled_cohorts = labeled_cohorts.toPandas()
+
+            # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
+
+            logger.info("Done preparing clinical task prediction for the given cohorts")
+        
+        labeled_cohorts =labeled_cohorts.toPandas() 
+        labeled_cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
+        
         return labeled_cohorts
 
     def make_compatible(self, icustays):
@@ -176,6 +294,7 @@ class eICU(EHR):
         }, inplace=True)
 
         return icustays
+    
 
     def make_dx_mapping(self):
         diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
@@ -275,6 +394,104 @@ class eICU(EHR):
 
         return str2cat
 
+    def clinical_task(self, cohorts, task, spark):
+        fname = self.task_itemids[task]["fname"]
+        timestamp = self.task_itemids[task]["timestamp"]
+        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
+        excludes = self.task_itemids[task]["exclude"]
+        code = self.task_itemids[task]["code"][0]
+        value = self.task_itemids[task]["value"][0]
+        itemid = self.task_itemids[task]["itemid"]
+
+        table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+        table = table.drop(*excludes)
+        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
+       
+        merge = cohorts.join(table, on=self.icustay_key, how="inner")
+
+        if task == 'creatinine':
+            # first icu assume
+            patient = spark.read.csv(os.path.join(self.data_dir, self._icustay_fname), header=True)
+            patient = patient.select(*[self.patient_key, self.icustay_key, self._hadm_key]) # icuunit intime
+            multi_hosp= patient.groupBy(self.patient_key).agg(F.count(self._hadm_key).alias("count")) \
+                        .filter(F.col("count") > 1).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+                      #multiple hosp
+            
+            dialysis_tables= self.task_itemids["dialysis"]['fname'] # Only treatment for dialysis
+            dialysis_code = self.task_itemids["dialysis"]['code'][0]
+
+            treat= spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
+           
+            treat_dialysis = treat.filter(F.col(dialysis_code).like('dialysis')) #str.contains
+            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left').filter(~F.col(self.patient_key).isin(multi_hosp)) # 이전 hospital에 하나라도 있으면 다음 hospital 고려 X
+            treat_dialysis.drop(self.patient_key)
+            
+            def dialysis_time(table, timecolumn):
+                return (table
+                    .withColumn("_DIALYSIS_TIME", F.col(timecolumn))
+                    .select(self.icustay_key, "_DIALYSIS_TIME")
+                )
+            
+            treat_dialysis = dialysis_time(treat_dialysis, self.task_itemids["dialysis"]['timestamp'])
+            treat_dialysis = treat_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
+            
+            merge = merge.join(treat_dialysis, on=self.icustay_key, how="left")
+            merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
+            merge = merge.drop("_DIALYSIS_TIME")
+        
+        # hospital 이 두개 이상인데 둘 중에 하나라도 dialysis 있으면 전체 id 제거
+        # hosptial 이 한개만 있으면 시간 따져서 체크
+        # 기본 가정은 first icu
+        
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
+        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
+
+        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size)
+        merge = merge.filter(
+            ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
+                ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
+
+        # Average value of events
+        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+
+        # Labeling
+        if task == 'bilirubin':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2).when(
+                            (value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3).when(
+                                value_agg.avg_value >= 12.0, 4)
+                )
+        elif task == 'platelets':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value >= 150, 0).when(
+                    (value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1).when(
+                        (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
+                            (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
+                                value_agg.avg_value < 20, 4)
+                )
+
+        elif task == 'creatinine':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 1.2, 0).when(
+                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
+                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
+                            (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
+                                value_agg.avg_value >= 5, 4)
+                )
+
+        elif task == 'wbc':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 4, 0).when(
+                    (value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1).when(
+                        (value_agg.avg_value > 12), 2)
+                )
+        
+        cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
+        
+        return cohorts
+    
     def infer_data_extension(self) -> str:
         if (len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 31):
             ext = ".csv.gz"

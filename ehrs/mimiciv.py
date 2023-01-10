@@ -106,6 +106,54 @@ class MIMICIV(EHR):
                 "desc_key": ["label"],
             },
         ]
+        
+        
+        if self.feature=='select':
+            extra_exclude_feature_dict ={
+                "hosp/labevents" + self.ext : [
+                                            'value','ref_range_lower', 
+                                          'ref_range_upper', 'flag', 'priority', 'comments'
+                                          ],
+                "hosp/prescriptions" + self.ext: [
+                                    'drug_type','form_rx','form_val_disp', 'form_unit_disp',
+                                    'doses_per_24_hrs', 'route'
+                                   ],
+                "icu/inputevents" + self.ext: [
+                                     'amount', 'amountuom','ordercategoryname', 'secondaryordercategoryname',
+                                    'ordercomponenttypedescription', 'ordercategorydescription','patientweight', 
+                                    'totalamount', 'totalamountuom', 'isopenbag','originalamount','originalrate'
+                                    ],
+            } 
+                       
+            for table in self.tables:
+                if table['fname'] in extra_exclude_feature_dict.keys():
+                    exclude_target_list = extra_exclude_feature_dict[table['fname']]
+                    table['exclude'].extend(exclude_target_list) 
+                
+        if self.emb_type =='codebase':
+            feature_types_for_codebase_emb_dict ={
+                "hosp/labevents" + self.ext : {
+                    'numeric_feat': ['value', 'valuenum', 'ref_range_upper', 'ref_range_lower'],
+                    'categorical_feat':[],
+                    'code_feat':['itemid']
+                },
+                "hosp/prescriptions" + self.ext: {
+                    'numeric_feat': ['dose_val_rx, from_val_disp, doses_per_24_hrs'],
+                    'categorical_feat':[],
+                    'code_feat':['drug']
+                },
+                "icu/inputevents" + self.ext: {
+                    'numeric_feat': ['amount', 'rate','patientweight', 'totalamount', 'originalamount', 'originalrate'],
+                    'categorical_feat':['isopenbag', 'continueinnextdept', 'cancelreason', 'valuecounts'],
+                    'code_feat':['itemid']
+                },
+            }
+
+            for table in self.tables:
+                if table['fname'] in feature_types_for_codebase_emb_dict.keys():
+                    feature_dict = feature_types_for_codebase_emb_dict[table['fname']]
+                    table.update(feature_dict)         
+                
 
         if self.creatinine or self.bilirubin or self.platelets or self.wbc:
             self.task_itemids = {

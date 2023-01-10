@@ -187,6 +187,19 @@ def get_parser():
     parser.add_argument(
         '--num_threads', type=int, default=8, help='number of threads to use'
     )
+    
+    
+    # CodeEmb / Feature select
+    parser.add_argument(
+        '--emb_type', type=str, choices=['codebase', 'textbase'], default='textbase', 
+        help='feature embedding type, codebase model = [SAND, Rajikomar], textbase model = [UniHPF, DescEmb]'
+    )
+    parser.add_argument(
+        '--feature', choices=['select', 'whole'], default='whole', help='pre-define feature select or whole table use'
+    )
+    parser.add_argument(
+        '--bucket_num', type=int, default=10, help='feature bucket num'
+    )
     return parser
 
 
@@ -197,6 +210,7 @@ def main(args):
         os.makedirs(args.dest)
 
     ehr = EHR_REGISTRY[args.ehr](args)
+    
     spark = (
         SparkSession.builder.master(f"local[{args.num_threads}]")
         .config("spark.driver.memory", "100g")

@@ -109,7 +109,76 @@ class MIMICIII(EHR):
                 "desc_key": ["LABEL"],
             },
         ]
+        
+        if self.feature=='select':
+            extra_exclude_feature_dict ={
+                "LABEVENTS" + self.ext : ['VALUE', 'FLAG'],
+                 "PRESCRIPTIONS" + self.ext: [
+                                    'DRUG_TYPE', 'DRUG_NAME_POE', 'DRUG_NAME_GENERIC', 
+                                   'FORMULARY_DRUG_CD','FORM_VAL_DISP', 'FORM_UNIT_DISP'
+                                   ],
+                 "INPUTEVENTS_MV" + self.ext: [
+                                    'AMOUNT', 'AMOUNTUOM', 'ORDERCATEGORYNAME', 'SECONDARYORDERCATEGORYNAME', 
+                                    'ORDERCOMPONENTTYPEDESCRIPTION', 'ORDERCATEGORYDESCRIPTION', 'PATIENTWEIGHT', 
+                                    'TOTALAMOUNT','TOTALAMOUNTUOM', 'ISOPENBAG', 'COMMENTS_EDITEDBY', 
+                                    'ORIGINALAMOUNT', 'ORIGINALRATE' 
+                                    ],
+                 "INPUTEVENTS_CV" + self.ext: [
+                                    'AMOUNT', 'AMOUNTUOM', 'NEWBOTTLE', 
+                                    'ORIGINALAMOUNT', 'ORIGINALRATE', 'ORIGIANLAMOUNTUOM', 
+                                    'ORIGINALRATE', 'ORIGINALRATEUOM', 'ORIGINALSITE'
+                                    ],
+                 }
+            
+            for table in self.tables:
+                if table['fname'] in extra_exclude_feature_dict.keys():
+                    exclude_target_list = extra_exclude_feature_dict[table['fname']]
+                    table['exclude'].extend(exclude_target_list) 
+        
+        
+        if self.emb_type =='codebase':
+            feature_types_for_codebase_emb_dict ={
+                "LABEVENTS" + self.ext : {
+                    'numeric_feat': ['VALUE', 'FLAG'],
+                    'categorical_feat':[],
+                    'code_feat':['ITEMID']
+                },
+                 "PRESCRIPTIONS" + self.ext: {
+                    'numeric_feat': ['DOSE_VAL_RX', 'FORM_VAL_DISP'],
+                    'categorical_feat':[],
+                    'code_feat':['DRUG']
+                },
+                 "INPUTEVENTS_MV" + self.ext: {
+                    'numeric_feat': [
+                        'AMOUNT',
+                        'RATE', 
+                        'PATIENTWEIGHT', 
+                        'TOTALAMOUNT', 
+                        'ORIGINALAMOUNT', 
+                        'ORIGINALRATE'
+                        ],
+                    'categorical_feat':['ISOPENBAG', 'CONTINUEINNEXTDEPT', 'CANCELREASON', 'VALUECOUNTS'],
+                    'code_feat':['ITEMID']
+                },
+                  "INPUTEVENTS_CV" + self.ext: {
+                    'numeric_feat': [
+                        'AMOUNT', 'RATE', 'PATIENTWEIGHT', 'TOTALAMOUNT', 
+                        'ORIGINALAMOUNT', 'ORIGINALRATE'
+                        ],
+                    'categorical_feat':[
+                        'ISOPENBAG', 'CONTINUEINNEXTDEPT', 'CANCELREASON', 
+                        'VALUECOUNTS'
+                        ],
+                    'code_feat':['ITEMID']
+                },
+            }
 
+            for table in self.tables:
+                if table['fname'] in feature_types_for_codebase_emb_dict.keys():
+                    feature_dict = feature_types_for_codebase_emb_dict[table['fname']]
+                    table.update(feature_dict) 
+            
+                    
         if self.creatinine or self.bilirubin or self.platelets or self.wbc:
             self.task_itemids = {
                 "creatinine": {
@@ -285,10 +354,11 @@ class MIMICIII(EHR):
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
         if self.bilirubin or self.platelets or self.creatinine or self.wbc:
+            
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
             )
-
+            breakpoint()
             labeled_cohorts = spark.createDataFrame(labeled_cohorts)
             
             if self.bilirubin:
@@ -379,7 +449,6 @@ class MIMICIII(EHR):
 
 
     def clinical_task(self, cohorts, task, spark):
-
         fname = self.task_itemids[task]["fname"]
         timestamp = self.task_itemids[task]["timestamp"]
         timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
@@ -401,7 +470,6 @@ class MIMICIII(EHR):
         # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
         if task == "creatinine":
             dialysis_tables = self.task_itemids["dialysis"]["tables"]
-            
             chartevents = spark.read.csv(os.path.join(self.data_dir, "CHARTEVENTS" + self.ext), header=True)
             inputevents_cv = spark.read.csv(os.path.join(self.data_dir, "INPUTEVENTS_CV" + self.ext), header=True)
             outputevents = spark.read.csv(os.path.join(self.data_dir, "OUTPUTEVENTS" + self.ext), header=True)
@@ -416,7 +484,7 @@ class MIMICIII(EHR):
             inputevents_mv = inputevents_mv.select(*dialysis_tables["inputevents_mv"]["include"])
             datetimeevents = datetimeevents.select(*dialysis_tables["datetimeevents"]["include"])
             procedureevents_mv = procedureevents_mv.select(*dialysis_tables["procedureevents_mv"]["include"])
-
+            
             # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
             cv_ce = chartevents.filter(F.col("ITEMID").isin(dialysis_tables["chartevents"]["itemid"]["cv_ce"])).filter(F.col("VALUE").isNotNull()).filter((F.col("ERROR").isNull()) | (F.col("ERROR") == 0)).filter( \
                 ((F.col("ITEMID").isin([152,148,149,146,147,151,150])) & (F.col("VALUE").isNotNull())) |
@@ -501,9 +569,9 @@ class MIMICIII(EHR):
                     (value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1).when(
                         (value_agg.avg_value > 12), 2)
                 )
-
+        
         cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
-
+        
         return cohorts
 
 

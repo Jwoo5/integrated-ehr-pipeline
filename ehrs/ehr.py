@@ -17,7 +17,7 @@ from itertools import chain
 from transformers import AutoTokenizer
 from tqdm import tqdm
 from pyspark.sql.types import StructType, StructField, ArrayType, IntegerType
-
+from utils import q_cut, col_name_add
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,11 @@ class EHR(object):
 
         self.first_icu = cfg.first_icu
 
+        #Emb_type / feature_select
+        self.emb_type = cfg.emb_type
+        self.feature = cfg.feature
+        self.bucket_num = cfg.bucket_num
+        
         # tasks
         self.mortality = cfg.mortality
         self.long_term_mortality = cfg.long_term_mortality
@@ -99,9 +104,15 @@ class EHR(object):
         self.max_special_tokens = 100
 
         self.tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
-        self.cls_token_id = self.tokenizer.cls_token_id
-        self.sep_token_id = self.tokenizer.sep_token_id
-
+        
+        if self.emb_type == 'textbase':
+            self.cls_token_id = self.tokenizer.cls_token_id
+            self.sep_token_id = self.tokenizer.sep_token_id
+            
+        elif self.emb_type =='codebase':
+            self.cls_token_id = 1
+            self.sep_token_id = 2
+                    
         self.table_type_id = 1
         self.column_type_id = 2
         self.value_type_id = 3
@@ -119,7 +130,8 @@ class EHR(object):
         self._icustay_key = None
         self._hadm_key = None
 
-
+        
+        
     @property
     def icustay_fname(self):
         return self._icustay_fname
@@ -171,7 +183,9 @@ class EHR(object):
         logger.info(
             "Start building cohorts for {}".format(self.ehr_name)
         )
-
+        logger.info(
+            "Emb_type {}, Feature {}".format(self.emb_type, self.feature)
+        )
         obs_size = self.obs_size
         gap_size = self.gap_size
 
@@ -345,9 +359,9 @@ class EHR(object):
                 "HOS_DISCHARGE_LOCATION"
             ]
         )
-
+        
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
-
+        
         logger.info("Done preparing tasks except for diagnosis prediction.")
 
         return labeled_cohorts
@@ -364,9 +378,9 @@ class EHR(object):
         else:
             logger.info("Start Preprocessing Tables")
             
-
         events_dfs = []
-        for table in self.tables:
+        for table_index, table in enumerate(self.tables):
+            
             fname = table["fname"]
             table_name = fname.split('/')[-1][: -len(self.ext)]
             timestamp_key = table["timestamp"]
@@ -435,65 +449,139 @@ class EHR(object):
                 raise NotImplementedError()
 
             events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
-
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
             if code_to_descriptions:
                 for col in code_to_descriptions.keys():
                     mapping_expr = F.create_map([F.lit(x) for x in chain(*code_to_descriptions[col].items())])
                     events = events.withColumn(col, mapping_expr[F.col(col)])
+            #breakpoint()
+            if self.emb_type=='codebase':
+                print('codebase pre-process starts')
+                events = events.toPandas()
+                print("Converted events Pyspark DataFrame to Pandas DataFrame")
+                
+                code_col = table['code_feat'][0]
+                dtype_code = events[code_col].dtype
+                
+                # Numericl feature bucketize
+                for numeric_col in table['numeric_feat']: 
+                    if numeric_col in events.columns:
+                        # numeric / not_numeric classifying
+                        numeric = events[pd.to_numeric(events[numeric_col], errors='coerce').notnull()]
+                        numeric= numeric.astype({numeric_col:'float'})
+                        not_numeric = events[pd.to_numeric(events[numeric_col], errors='coerce').isnull()]
+                        #breakpoint()
+                        # buckettize
+                        numeric.loc[:, numeric_col] = numeric.groupby(code_col)[numeric_col].transform(lambda x: x.rank(method = 'dense'))
+                        numeric.loc[:, numeric_col]= numeric.groupby(code_col)[numeric_col].transform(lambda x: q_cut(x, self.bucket_num))
 
-            def process_unit(text, type_id):
-                # Given (table_name|col|val), generate ([inp], [type], [dpe])
-                text = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(text))
-                number_groups = [g for g in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", text)]
-                text = re.sub(r"([0-9\.])", r" \1 ", text)
-                input_ids = self.tokenizer.encode(text, add_special_tokens=False)
-                types = [type_id] * len(input_ids)
+                        numeric.loc[:, numeric_col] = 'B_' + numeric[numeric_col].astype('str')
+                        events = pd.concat([numeric, not_numeric], axis=0)
+                
+                # Categorical feature categorize
+                for cate_col in table['categorical_feat']:
+                    if cate_col in events.columns:
+                        events.loc[:, cate_col] = events[cate_col].map(lambda x: col_name_add(x, cate_col))
+                
+                events= events.astype({code_col:dtype_code})
+                
+                table_feature_unique = []
+                for col in events.columns:
+                    if col in [self.icustay_key, "TIME"]:
+                        continue
+                    col_unique = list(events[col].unique())
+                    table_feature_unique.extend(col_unique)
+                
+                table_feature_unique = list(set(table_feature_unique))
+                
+                if len(events_dfs)==0:
+                    max_idx = 3
+                    self.table_feature_dict = {k:idx+max_idx for idx, k in enumerate(table_feature_unique)}
+                else:
+                    max_idx = max(self.table_feature_dict.values())
+                    table_feature_unique = [
+                                            k for k in list(set(table_feature_unique)) 
+                                            if k not in self.table_feature_dict.keys()
+                                            ]
+                    self.table_feature_dict.update(
+                        {
+                        k:idx+max_idx 
+                        for idx, k in enumerate(table_feature_unique)
+                        }
+                    )
+                
+                encoded_table_name = ([3+table_index], [self.table_type_id], [0])
+                encoded_cols = {
+                    k: ([3+len(self.tables)+i], [self.column_type_id], [0]) 
+                        for i, k in enumerate(events.columns) if not k in [self.icustay_key, 'TIME']
+                                }
+                
+                events=spark.createDataFrame(events)
+                print("Converted Events DataFrame to Pyspark DataFrame")
+                
+                def process_unit(feature, type_id):
+                    input_ids = [self.table_feature_dict[feature]]
+                    types = [type_id]
+                    dpes = [0]
+                    return input_ids, types, dpes
+            
+            
+            elif self.emb_type=='textbase':
+                print('textbase pre-process starts')
+                def process_unit(text, type_id):
+                    # Given (table_name|col|val), generate ([inp], [type], [dpe])
+                    text = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(text))
+                    number_groups = [g for g in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", text)]
+                    text = re.sub(r"([0-9\.])", r" \1 ", text)
+                    input_ids = self.tokenizer.encode(text, add_special_tokens=False)
+                    types = [type_id] * len(input_ids)
 
-                def get_dpe(tokens, number_groups):
-                    number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]
-                    numbers = [i for i, j in enumerate(tokens) if j in number_ids]
-                    numbers_cnt = 0
-                    data_dpe = [0] * len(tokens)
-                    for group in number_groups:
-                        if group[0] == "." * len(group[0]):
+                    def get_dpe(tokens, number_groups):
+                        number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]
+                        numbers = [i for i, j in enumerate(tokens) if j in number_ids]
+                        numbers_cnt = 0
+                        data_dpe = [0] * len(tokens)
+                        for group in number_groups:
+                            if group[0] == "." * len(group[0]):
+                                numbers_cnt += len(group[0])
+                                continue
+
+                            start = numbers[numbers_cnt]
+                            end = numbers[numbers_cnt + len(group[0]) - 1] + 1
+                            corresponding_numbers = tokens[start:end]
+                            digits = [i for i, j in enumerate(corresponding_numbers) if j==119]
+
+                            # Case Integer
+                            if len(digits) == 0:
+                                data_dpe[start:end] = list(range(len(group[0]) + 5, 5, -1))
+                            # Case Float
+                            elif len(digits) == 1:
+                                digit_idx = len(group[0]) - digits[0]
+                                data_dpe[start:end] = list(
+                                    range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
+                                )
+                            else:
+                                logger.warn(f"{data_dpe[start:end]} has irregular numerical formats")
+
                             numbers_cnt += len(group[0])
-                            continue
+                        return data_dpe
 
-                        start = numbers[numbers_cnt]
-                        end = numbers[numbers_cnt + len(group[0]) - 1] + 1
-                        corresponding_numbers = tokens[start:end]
-                        digits = [i for i, j in enumerate(corresponding_numbers) if j==119]
-
-                        # Case Integer
-                        if len(digits) == 0:
-                            data_dpe[start:end] = list(range(len(group[0]) + 5, 5, -1))
-                        # Case Float
-                        elif len(digits) == 1:
-                            digit_idx = len(group[0]) - digits[0]
-                            data_dpe[start:end] = list(
-                                range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
-                            )
-                        else:
-                            logger.warn(f"{data_dpe[start:end]} has irregular numerical formats")
-
-                        numbers_cnt += len(group[0])
-                    return data_dpe
-
-                dpes = get_dpe(input_ids, number_groups)
-                return input_ids, types, dpes
-
-            encoded_table_name = process_unit(table_name, self.table_type_id)
-            encoded_cols = {k: process_unit(k, self.column_type_id) for k in events.columns}
-
+                    dpes = get_dpe(input_ids, number_groups)
+                    return input_ids, types, dpes
+                
+                encoded_table_name = process_unit(table_name, self.table_type_id)  # table name
+                encoded_cols = {k: process_unit(k, self.column_type_id) for k in events.columns} # table cols
+            
             schema = StructType(
-                [
+                                [
                     StructField("INPUTS", ArrayType(IntegerType()), False),
                     StructField("TYPES", ArrayType(IntegerType()), False),
-                    StructField("DPES", ArrayType(IntegerType()), False),
-                ]
-            )
+                    StructField("DPES", ArrayType(IntegerType()), False)
+                ])
+            
+            # encoded_table_name -> tuple(Input, type, dpe)
+            # encoded_cols -> dict(col_name: input,type, dpe)
             def process_row(encoded_table_name, encoded_cols):
                 def _process_row(row):
                     """
@@ -512,6 +600,9 @@ class EHR(object):
                             continue
                         encoded_col = encoded_cols[col]
                         encoded_val = process_unit(val, self.value_type_id)
+                            
+                        #-> values code화
+                        
                         if len(input_ids) + len(encoded_col[0]) + len(encoded_val[0]) + 2 <= self.max_event_token_len:
                             input_ids += encoded_col[0] + encoded_val[0]
                             types += encoded_col[1] + encoded_val[1]
@@ -520,15 +611,21 @@ class EHR(object):
                             break
                     return input_ids, types, dpes
                 return F.udf(_process_row, returnType=schema)
-
+            
             events = (
                 events.withColumn("tmp", process_row(encoded_table_name, encoded_cols)(F.struct(*events.columns)))
                     .withColumn("INPUTS", F.col("tmp.INPUTS"))
                     .withColumn("TYPES", F.col("tmp.TYPES"))
                     .withColumn("DPES", F.col("tmp.DPES"))
-                    .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
-            )
+                    .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES") #column 을 얘네만 남김
+            ) # event process # -> INPUTS / TYPES / DPES /
+            
             events_dfs.append(events)
+            
+        if self.emb_type=='codebase':
+            with open(os.path.join(self.cache_dir, self.ehr_name, f"codebase_code2idx_{self.feature}.pkl"), "wb") as f:
+                pickle.dump(self.table_feature_dict, f)
+                
         return reduce(lambda x, y: x.union(y), events_dfs)
 
 
@@ -587,25 +684,25 @@ class EHR(object):
                 "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
                 "time": df["TIME"].values,
             }
-            with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
+            with open(os.path.join(self.cache_dir, self.ehr_name, self.emb_type, self.feature, f"{stay_id}.pkl"), "wb") as f:
                 pickle.dump(data, f)
             return events["TIME"].to_frame()
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+        #shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name, self.emb_type, self.feature), ignore_errors=True)
+        os.makedirs(os.path.join(self.cache_dir, self.ehr_name, self.emb_type, self.feature), exist_ok=True)
 
         events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
 
         logger.info("Finish Data Preprocessing. Start to write to hdf5")
 
-        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
+        f = h5py.File(os.path.join(self.dest, f"{self.emb_type}_{self.feature}_{self.ehr_name}.h5"), "w")
         ehr_g = f.create_group("ehr")
 
         active_stay_ids = []
 
-        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
+        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name, self.emb_type, self.feature))): #45080 / 45080
             stay_id = stay_id_file.split(".")[0]
-            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
+            with open(os.path.join(self.cache_dir, self.ehr_name, self.emb_type, self.feature, stay_id_file), 'rb') as f:
                 data = pickle.load(f)
             stay_g = ehr_g.create_group(str(stay_id))
             stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
@@ -613,10 +710,10 @@ class EHR(object):
             stay_g.create_dataset('time', data = data['time'], dtype='i')
             active_stay_ids.append(int(stay_id))
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        #shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name, self.emb_type, self.feature), ignore_errors=True)
         # Drop patients with few events
 
-        if not isinstance(cohorts, pd.DataFrame):
+        if not isinstance(cohorts, pd.DataFrame): #Spark to Pandas ?
             cohorts = cohorts.toPandas()
             print(cohorts)
 
@@ -653,8 +750,9 @@ class EHR(object):
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
-        events = self.process_tables(labeled_cohorts, spark)
-        self.make_input(labeled_cohorts, events, spark)
+        
+        # events = self.process_tables(labeled_cohorts, spark)
+        # self.make_input(labeled_cohorts, events, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
