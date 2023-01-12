@@ -358,7 +358,7 @@ class MIMICIII(EHR):
             logger.info(
                 "Start labeling cohorts for clinical task prediction."
             )
-            breakpoint()
+            
             labeled_cohorts = spark.createDataFrame(labeled_cohorts)
             
             if self.bilirubin:

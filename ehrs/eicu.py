@@ -410,7 +410,6 @@ class eICU(EHR):
         merge = cohorts.join(table, on=self.icustay_key, how="inner")
 
         if task == 'creatinine':
-            # first icu assume
             patient = spark.read.csv(os.path.join(self.data_dir, self._icustay_fname), header=True)
             patient = patient.select(*[self.patient_key, self.icustay_key, self._hadm_key]) # icuunit intime
             multi_hosp= patient.groupBy(self.patient_key).agg(F.count(self._hadm_key).alias("count")) \
@@ -421,9 +420,11 @@ class eICU(EHR):
             dialysis_code = self.task_itemids["dialysis"]['code'][0]
 
             treat= spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
-           
-            treat_dialysis = treat.filter(F.col(dialysis_code).like('dialysis')) #str.contains
-            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left').filter(~F.col(self.patient_key).isin(multi_hosp)) # 이전 hospital에 하나라도 있으면 다음 hospital 고려 X
+            
+            treat_dialysis = treat.where(F.col(dialysis_code).contains('dialysis')) 
+            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left')
+            dialysis_multihosp = treat_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+            
             treat_dialysis.drop(self.patient_key)
             
             def dialysis_time(table, timecolumn):
@@ -434,14 +435,10 @@ class eICU(EHR):
             
             treat_dialysis = dialysis_time(treat_dialysis, self.task_itemids["dialysis"]['timestamp'])
             treat_dialysis = treat_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
-            
+            treat_dialysis = treat_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
             merge = merge.join(treat_dialysis, on=self.icustay_key, how="left")
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
-        
-        # hospital 이 두개 이상인데 둘 중에 하나라도 dialysis 있으면 전체 id 제거
-        # hosptial 이 한개만 있으면 시간 따져서 체크
-        # 기본 가정은 first icu
         
         # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
         # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
@@ -473,6 +470,7 @@ class eICU(EHR):
                 )
 
         elif task == 'creatinine':
+            value_agg = value_agg.join(patient.select([self.patient_key, self.icustay_key]), on=self.icustay_key, how='left')
             value_agg = value_agg.withColumn(task,
                 F.when(value_agg.avg_value < 1.2, 0).when(
                     (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
@@ -480,7 +478,9 @@ class eICU(EHR):
                             (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
                                 value_agg.avg_value >= 5, 4)
                 )
-
+            value_agg = value_agg.filter(~F.col(self.patient_key).isin(dialysis_multihosp))
+            value_agg = value_agg.drop(self.patient_key)
+            
         elif task == 'wbc':
             value_agg = value_agg.withColumn(task,
                 F.when(value_agg.avg_value < 4, 0).when(

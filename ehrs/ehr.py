@@ -455,7 +455,7 @@ class EHR(object):
                 for col in code_to_descriptions.keys():
                     mapping_expr = F.create_map([F.lit(x) for x in chain(*code_to_descriptions[col].items())])
                     events = events.withColumn(col, mapping_expr[F.col(col)])
-            #breakpoint()
+            
             if self.emb_type=='codebase':
                 print('codebase pre-process starts')
                 events = events.toPandas()
@@ -471,7 +471,7 @@ class EHR(object):
                         numeric = events[pd.to_numeric(events[numeric_col], errors='coerce').notnull()]
                         numeric= numeric.astype({numeric_col:'float'})
                         not_numeric = events[pd.to_numeric(events[numeric_col], errors='coerce').isnull()]
-                        #breakpoint()
+                        
                         # buckettize
                         numeric.loc[:, numeric_col] = numeric.groupby(code_col)[numeric_col].transform(lambda x: x.rank(method = 'dense'))
                         numeric.loc[:, numeric_col]= numeric.groupby(code_col)[numeric_col].transform(lambda x: q_cut(x, self.bucket_num))
@@ -750,9 +750,8 @@ class EHR(object):
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
-        
-        # events = self.process_tables(labeled_cohorts, spark)
-        # self.make_input(labeled_cohorts, events, spark)
+        events = self.process_tables(labeled_cohorts, spark)
+        self.make_input(labeled_cohorts, events, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
