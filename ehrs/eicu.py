@@ -368,23 +368,22 @@ class eICU(EHR):
         merge = cohorts.join(table, on=self.icustay_key, how="inner")
 
         if task == 'creatinine':
-            # first icu assume
             patient = spark.read.csv(os.path.join(self.data_dir, self._icustay_fname), header=True)
             patient = patient.select(*[self.patient_key, self.icustay_key, self._hadm_key]) # icuunit intime
             multi_hosp= patient.groupBy(self.patient_key).agg(F.count(self._hadm_key).alias("count")) \
                         .filter(F.col("count") > 1).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
-                      
+                      #multiple hosp
             
             dialysis_tables= self.task_itemids["dialysis"]['fname'] # Only treatment for dialysis
             dialysis_code = self.task_itemids["dialysis"]['code'][0]
 
             treat= spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
-           
-            treat_dialysis = treat.filter(F.col(dialysis_code).like('dialysis')) #str.contains
-            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left').filter(~F.col(self.patient_key).isin(multi_hosp)) 
             
-            treat_dialysis.drop(self.patient_key) 
-            #Multiple hospital patient remove if diaylsis event occur - there is no hosp time sequence information in eICU
+            treat_dialysis = treat.where(F.col(dialysis_code).contains('dialysis')) 
+            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left')
+            dialysis_multihosp = treat_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+            
+            treat_dialysis.drop(self.patient_key)
             
             def dialysis_time(table, timecolumn):
                 return (table
@@ -394,10 +393,13 @@ class eICU(EHR):
             
             treat_dialysis = dialysis_time(treat_dialysis, self.task_itemids["dialysis"]['timestamp'])
             treat_dialysis = treat_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
-            
+            treat_dialysis = treat_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
             merge = merge.join(treat_dialysis, on=self.icustay_key, how="left")
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
+        
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
+        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
 
         # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size)
         merge = merge.filter(
@@ -405,7 +407,7 @@ class eICU(EHR):
                 ((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
 
         # Average value of events
-        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) 
+        value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
 
         # Labeling
         if task == 'bilirubin':
@@ -426,6 +428,7 @@ class eICU(EHR):
                 )
 
         elif task == 'creatinine':
+            value_agg = value_agg.join(patient.select([self.patient_key, self.icustay_key]), on=self.icustay_key, how='left')
             value_agg = value_agg.withColumn(task,
                 F.when(value_agg.avg_value < 1.2, 0).when(
                     (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
@@ -433,7 +436,9 @@ class eICU(EHR):
                             (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
                                 value_agg.avg_value >= 5, 4)
                 )
-
+            value_agg = value_agg.filter(~F.col(self.patient_key).isin(dialysis_multihosp))
+            value_agg = value_agg.drop(self.patient_key)
+            
         elif task == 'wbc':
             value_agg = value_agg.withColumn(task,
                 F.when(value_agg.avg_value < 4, 0).when(
