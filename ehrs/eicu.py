@@ -124,13 +124,13 @@ class eICU(EHR):
                     "itemid": ["WBC x 1000"]
                 },
                 "dialysis": {
-                        "fname": "treatment" + self.ext,
-                        "timestamp": "treatmentoffset",
+                        "fname": "intakeOutput" + self.ext,
+                        "timestamp": "intakeoutputoffset",
                         "timeoffsetunit": "min",
-                        "exclude": ["treatmentid"],
-                        "code": ["treatmentstring"],
+                        "exclude": ["intakeoutputid", "intaketotal", "outputtotal", "nettotal", "intakeoutputentryoffset"],
+                        "code": ["dialysistotal"],
                         "value": [],
-                        "itemid": ["dialysis"]
+                        "itemid": []
                         },
                                 
                 }
@@ -376,14 +376,17 @@ class eICU(EHR):
             
             dialysis_tables= self.task_itemids["dialysis"]['fname'] # Only treatment for dialysis
             dialysis_code = self.task_itemids["dialysis"]['code'][0]
-
-            treat= spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
+            excludes = self.task_itemids["dialysis"]['exclude']
             
-            treat_dialysis = treat.where(F.col(dialysis_code).contains('dialysis')) 
-            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left')
-            dialysis_multihosp = treat_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+            io = spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
+            io= io.drop(*excludes)
             
-            treat_dialysis.drop(self.patient_key)
+            io_dialysis = io.filter(F.col(dialysis_code) < 0) 
+            io_dialysis = io_dialysis.join(patient, on=self.icustay_key, how='left')
+           
+            dialysis_multihosp = io_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+            
+            io_dialysis = io_dialysis.drop(self.patient_key)
             
             def dialysis_time(table, timecolumn):
                 return (table
@@ -391,16 +394,15 @@ class eICU(EHR):
                     .select(self.icustay_key, "_DIALYSIS_TIME")
                 )
             
-            treat_dialysis = dialysis_time(treat_dialysis, self.task_itemids["dialysis"]['timestamp'])
-            treat_dialysis = treat_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
-            treat_dialysis = treat_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
-            merge = merge.join(treat_dialysis, on=self.icustay_key, how="left")
+            io_dialysis = dialysis_time(io_dialysis, self.task_itemids["dialysis"]['timestamp'])
+            io_dialysis = io_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
+            io_dialysis = io_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
+            merge = merge.join(io_dialysis, on=self.icustay_key, how="left")
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
         
         # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
-        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
-
+    
         # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size)
         merge = merge.filter(
             ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
