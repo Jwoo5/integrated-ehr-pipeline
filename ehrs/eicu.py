@@ -85,7 +85,6 @@ class eICU(EHR):
             },
         ]
 
-<<<<<<< HEAD
         if self.feature=='select':
             extra_exclude_feature_dict ={
                 "lab" + self.ext: ['labtypeid', 'labresulttext', 'labmeasurenameinterface', 'labresultrevisedoffset'],
@@ -123,8 +122,6 @@ class eICU(EHR):
                     feature_dict = feature_types_for_codebase_emb_dict[table['fname']]
                     table.update(feature_dict) 
                     
-=======
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
         if self.creatinine or self.bilirubin or self.platelets or self.wbc:
             self.task_itemids = {
                 "creatinine": {
@@ -164,15 +161,6 @@ class eICU(EHR):
                     "itemid": ["WBC x 1000"]
                 },
                 "dialysis": {
-<<<<<<< HEAD
-                        "fname": "treatment" + self.ext,
-                        "timestamp": "treatmentoffset",
-                        "timeoffsetunit": "min",
-                        "exclude": ["treatmentid"],
-                        "code": ["treatmentstring"],
-                        "value": [],
-                        "itemid": ["dialysis"]
-=======
                         "fname": "intakeOutput" + self.ext,
                         "timestamp": "intakeoutputoffset",
                         "timeoffsetunit": "min",
@@ -180,15 +168,10 @@ class eICU(EHR):
                         "code": ["dialysistotal"],
                         "value": [],
                         "itemid": []
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
                         },
                                 
                 }
         
-<<<<<<< HEAD
-        
-=======
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
         self.disch_map_dict = {
             "Home": "Home",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
@@ -229,10 +212,7 @@ class eICU(EHR):
             logger.info(
                 "Start labeling cohorts for diagnosis prediction."
             )
-<<<<<<< HEAD
-=======
             
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
             str2cat = self.make_dx_mapping()
             dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
             dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
@@ -272,21 +252,11 @@ class eICU(EHR):
 
             if self.wbc:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
-<<<<<<< HEAD
-            # labeled_cohorts = labeled_cohorts.toPandas()
-=======
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
 
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
         
-<<<<<<< HEAD
-        labeled_cohorts =labeled_cohorts.toPandas() 
-        labeled_cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
-        
-=======
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
         return labeled_cohorts
 
     def make_compatible(self, icustays):
@@ -321,10 +291,6 @@ class eICU(EHR):
 
         return icustays
     
-<<<<<<< HEAD
-
-=======
->>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
     def make_dx_mapping(self):
         diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
         ccs_dx = pd.read_csv(self.ccs_path)
