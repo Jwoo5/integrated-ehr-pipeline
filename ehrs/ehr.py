@@ -726,12 +726,12 @@ class EHR(object):
             cum_len = shuffled.cumsum()
 
             cohorts.loc[cohorts[self.patient_key].isin(
-                shuffled[cum_len < int(len(shuffled)*self.valid_percent)].index), f'split_{seed}'] = 'test'
+                shuffled[cum_len < int(sum(shuffled)*self.valid_percent)].index), f'split_{seed}'] = 'test'
             cohorts.loc[cohorts[self.patient_key].isin(
-                shuffled[(cum_len >= int(len(shuffled)*self.valid_percent)) 
-                & (cum_len < int(len(shuffled)*2*self.valid_percent))].index), f'split_{seed}'] = 'valid'
+                shuffled[(cum_len >= int(sum(shuffled)*self.valid_percent)) 
+                & (cum_len < int(sum(shuffled)*2*self.valid_percent))].index), f'split_{seed}'] = 'valid'
             cohorts.loc[cohorts[self.patient_key].isin(
-                shuffled[cum_len >= int(len(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
+                shuffled[cum_len >= int(sum(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
 
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
 

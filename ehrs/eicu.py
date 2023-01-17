@@ -85,6 +85,7 @@ class eICU(EHR):
             },
         ]
 
+<<<<<<< HEAD
         if self.feature=='select':
             extra_exclude_feature_dict ={
                 "lab" + self.ext: ['labtypeid', 'labresulttext', 'labmeasurenameinterface', 'labresultrevisedoffset'],
@@ -122,6 +123,8 @@ class eICU(EHR):
                     feature_dict = feature_types_for_codebase_emb_dict[table['fname']]
                     table.update(feature_dict) 
                     
+=======
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
         if self.creatinine or self.bilirubin or self.platelets or self.wbc:
             self.task_itemids = {
                 "creatinine": {
@@ -161,6 +164,7 @@ class eICU(EHR):
                     "itemid": ["WBC x 1000"]
                 },
                 "dialysis": {
+<<<<<<< HEAD
                         "fname": "treatment" + self.ext,
                         "timestamp": "treatmentoffset",
                         "timeoffsetunit": "min",
@@ -168,11 +172,23 @@ class eICU(EHR):
                         "code": ["treatmentstring"],
                         "value": [],
                         "itemid": ["dialysis"]
+=======
+                        "fname": "intakeOutput" + self.ext,
+                        "timestamp": "intakeoutputoffset",
+                        "timeoffsetunit": "min",
+                        "exclude": ["intakeoutputid", "intaketotal", "outputtotal", "nettotal", "intakeoutputentryoffset"],
+                        "code": ["dialysistotal"],
+                        "value": [],
+                        "itemid": []
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
                         },
                                 
                 }
         
+<<<<<<< HEAD
         
+=======
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
         self.disch_map_dict = {
             "Home": "Home",
             "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
@@ -213,6 +229,10 @@ class eICU(EHR):
             logger.info(
                 "Start labeling cohorts for diagnosis prediction."
             )
+<<<<<<< HEAD
+=======
+            
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
             str2cat = self.make_dx_mapping()
             dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
             dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
@@ -252,15 +272,21 @@ class eICU(EHR):
 
             if self.wbc:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
+<<<<<<< HEAD
             # labeled_cohorts = labeled_cohorts.toPandas()
+=======
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
 
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
         
+<<<<<<< HEAD
         labeled_cohorts =labeled_cohorts.toPandas() 
         labeled_cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
         
+=======
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
         return labeled_cohorts
 
     def make_compatible(self, icustays):
@@ -295,7 +321,10 @@ class eICU(EHR):
 
         return icustays
     
+<<<<<<< HEAD
 
+=======
+>>>>>>> eaf1a7c985936abc8ed224e99638229729c45484
     def make_dx_mapping(self):
         diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
         ccs_dx = pd.read_csv(self.ccs_path)
@@ -418,14 +447,17 @@ class eICU(EHR):
             
             dialysis_tables= self.task_itemids["dialysis"]['fname'] # Only treatment for dialysis
             dialysis_code = self.task_itemids["dialysis"]['code'][0]
-
-            treat= spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
+            excludes = self.task_itemids["dialysis"]['exclude']
             
-            treat_dialysis = treat.where(F.col(dialysis_code).contains('dialysis')) 
-            treat_dialysis = treat_dialysis.join(patient, on=self.icustay_key, how='left')
-            dialysis_multihosp = treat_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+            io = spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
+            io= io.drop(*excludes)
             
-            treat_dialysis.drop(self.patient_key)
+            io_dialysis = io.filter(F.col(dialysis_code) < 0) 
+            io_dialysis = io_dialysis.join(patient, on=self.icustay_key, how='left')
+           
+            dialysis_multihosp = io_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
+            
+            io_dialysis = io_dialysis.drop(self.patient_key)
             
             def dialysis_time(table, timecolumn):
                 return (table
@@ -433,16 +465,15 @@ class eICU(EHR):
                     .select(self.icustay_key, "_DIALYSIS_TIME")
                 )
             
-            treat_dialysis = dialysis_time(treat_dialysis, self.task_itemids["dialysis"]['timestamp'])
-            treat_dialysis = treat_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
-            treat_dialysis = treat_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
-            merge = merge.join(treat_dialysis, on=self.icustay_key, how="left")
+            io_dialysis = dialysis_time(io_dialysis, self.task_itemids["dialysis"]['timestamp'])
+            io_dialysis = io_dialysis.groupBy(self.icustay_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
+            io_dialysis = io_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
+            merge = merge.join(io_dialysis, on=self.icustay_key, how="left")
             merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
             merge = merge.drop("_DIALYSIS_TIME")
         
         # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
-        # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iii/concepts/rrt.sql
-
+    
         # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size)
         merge = merge.filter(
             ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)).filter(
