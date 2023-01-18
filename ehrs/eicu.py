@@ -418,7 +418,7 @@ class eICU(EHR):
             io = spark.read.csv(os.path.join(self.data_dir, dialysis_tables), header=True)
             io= io.drop(*excludes)
             
-            io_dialysis = io.filter(F.col(dialysis_code) < 0) 
+            io_dialysis = io.filter(F.col(dialysis_code) != 0) 
             io_dialysis = io_dialysis.join(patient, on=self.icustay_key, how='left')
            
             dialysis_multihosp = io_dialysis.filter(F.col(self.patient_key).isin(multi_hosp)).select(self.patient_key).rdd.flatMap(lambda row: row).collect() 
