@@ -166,6 +166,14 @@ class eICU(EHR):
 
     def load_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+
+        # filter by age
+        icustays.dropna(subset=["age"], inplace=True)
+        icustays["AGE"] = icustays["age"].replace("> 89", 300).astype(int)
+        icustays = icustays[
+            (self.min_age <= icustays["AGE"]) & (icustays["AGE"] <= self.max_age)
+        ]
+
         icustays["INTIME"] = 0
         icustays.rename(columns={"unitdischargeoffset": "OUTTIME"}, inplace=True)
 

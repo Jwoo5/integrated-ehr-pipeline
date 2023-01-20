@@ -251,6 +251,7 @@ class MIMICIII(EHR):
         return cohorts
 
     def load_cohorts(self, cached=False):
+        patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 
         icustays.loc[:, "INTIME"] = pd.to_datetime(
@@ -259,6 +260,32 @@ class MIMICIII(EHR):
         icustays.loc[:, "OUTTIME"] = pd.to_datetime(
             icustays["OUTTIME"], infer_datetime_format=True
         )
+
+        # merge icustays with patients to get DOB
+        patients["DOB"] = pd.to_datetime(patients["DOB"], infer_datetime_format=True)
+        patients = patients[
+            patients["SUBJECT_ID"].isin(icustays["SUBJECT_ID"])
+        ]
+        patients = patients.drop(columns=["ROW_ID"])[["DOB", "SUBJECT_ID"]]
+        icustays = icustays.merge(patients, on="SUBJECT_ID", how="left")
+
+        def calculate_age(birth: datetime, now: datetime):
+            age = now.year - birth.year
+            if now.month < birth.month:
+                age -= 1
+            elif (now.month == birth.month) and (now.day < birth.day):
+                age -= 1
+
+            return age
+
+        icustays["AGE"] = icustays.apply(
+            lambda x: calculate_age(x["DOB"], x["INTIME"]), axis=1
+        )
+
+        # filter by age
+        icustays = icustays[
+            (self.min_age <= icustays["AGE"]) & (icustays["AGE"] <= self.max_age)
+        ]
         
         icustays["OUTTIME"] = (icustays["OUTTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
 

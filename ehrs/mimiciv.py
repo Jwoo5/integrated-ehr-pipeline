@@ -212,6 +212,7 @@ class MIMICIV(EHR):
         return cohorts
 
     def load_cohorts(self, cached=False):
+        patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 
         icustays = icustays.rename(columns={
@@ -225,6 +226,17 @@ class MIMICIV(EHR):
         icustays.loc[:, "OUTTIME"] = pd.to_datetime(
             icustays["OUTTIME"], infer_datetime_format=True
         )
+
+        # filter by age
+        icustays = icustays.merge(patients, on="subject_id", how="left")
+        icustays["AGE"] = (
+            icustays["INTIME"].dt.year
+            - icustays["anchor_year"]
+            + icustays["anchor_age"]
+        )
+        icustays = icustays[
+            (self.min_age <= icustays["AGE"]) & (icustays["AGE"] <= self.max_age)
+        ]
         
         icustays["OUTTIME"] = (icustays["OUTTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
 
