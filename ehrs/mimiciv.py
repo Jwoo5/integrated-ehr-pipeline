@@ -1,11 +1,13 @@
-import os
-import logging
-import pandas as pd
-import numpy as np
 import glob
-from ehrs import register_ehr, EHR
+import logging
+import os
+
+import numpy as np
+import pandas as pd
 import pyspark.sql.functions as F
 import pyspark.sql.types as T
+
+from ehrs import EHR, register_ehr
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +309,8 @@ class MIMICIV(EHR):
             labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
 
             logger.info("Done preparing diagnosis prediction for the given cohorts")
+
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
         if self.bilirubin or self.platelets or self.creatinine or self.wbc:
             logger.info(

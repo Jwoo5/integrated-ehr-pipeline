@@ -1,13 +1,16 @@
-import os
-import logging
-import treelib
-from collections import Counter
-import pandas as pd
 import glob
+import logging
+import os
+from collections import Counter
 
-from ehrs import register_ehr, EHR
+import pandas as pd
+import pyspark.sql.functions as F
+import treelib
+
+from ehrs import EHR, register_ehr
 
 logger = logging.getLogger(__name__)
+
 
 @register_ehr("eicu")
 class eICU(EHR):
@@ -26,8 +29,7 @@ class eICU(EHR):
                     "Please log in to physionet.org with a credentialed user."
                 )
                 self.download_ehr_from_url(
-                    url="https://physionet.org/files/eicu-crd/2.0/",
-                    dest=self.data_dir
+                    url="https://physionet.org/files/eicu-crd/2.0/", dest=self.data_dir
                 )
 
         logger.info("Data directory is set to {}".format(self.data_dir))
@@ -85,55 +87,146 @@ class eICU(EHR):
         ]
         if cfg.use_more_tables:
             self.tables += [
-            {
-                "fname": "nurseCharting" + self.ext,
-                "timestamp": "nursingchartoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["nursingchartentryoffset", "nursingchartid"],
-            },
                 {
-                "fname": "nurseCare" + self.ext,
-                "timestamp": "nursecareoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["nursecareentryoffset", "nursecareid"],
-            },
-            {
-                "fname": "intakeOutput" + self.ext,
-                "timestamp": "intakeoutputoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["intakeoutputentryoffset", "intakeoutputid"],
-            },
-            {
-                "fname": "microLab" + self.ext,
-                "timestamp": "culturetakenoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["microlabid"],
-            },
-            {
-                "fname": "nurseAssessment" + self.ext,
-                "timestamp": "nurseassessoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["nurseassessentryoffset", "nurseassessid"],
-            },
-            {
-                "fname": "treatment" + self.ext,
-                "timestamp": "treatmentoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["treatmentid", "activeupondischarge"],
-            },
-            {
-                "fname": "vitalAperiodic" + self.ext,
-                "timestamp": "observationoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["vitalaperiodicid"],
-            },
-            {
-                "fname": "vitalPeriodic" + self.ext,
-                "timestamp": "observationoffset",
-                "timeoffsetunit": "min",
-                "exclude": ["vitalperiodicid"],
-            },
-        ]
+                    "fname": "nurseCharting" + self.ext,
+                    "timestamp": "nursingchartoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["nursingchartentryoffset", "nursingchartid"],
+                },
+                {
+                    "fname": "nurseCare" + self.ext,
+                    "timestamp": "nursecareoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["nursecareentryoffset", "nursecareid"],
+                },
+                {
+                    "fname": "intakeOutput" + self.ext,
+                    "timestamp": "intakeoutputoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["intakeoutputentryoffset", "intakeoutputid"],
+                },
+                {
+                    "fname": "microLab" + self.ext,
+                    "timestamp": "culturetakenoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["microlabid"],
+                },
+                {
+                    "fname": "nurseAssessment" + self.ext,
+                    "timestamp": "nurseassessoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["nurseassessentryoffset", "nurseassessid"],
+                },
+                {
+                    "fname": "treatment" + self.ext,
+                    "timestamp": "treatmentoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["treatmentid", "activeupondischarge"],
+                },
+                {
+                    "fname": "vitalAperiodic" + self.ext,
+                    "timestamp": "observationoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["vitalaperiodicid"],
+                },
+                {
+                    "fname": "vitalPeriodic" + self.ext,
+                    "timestamp": "observationoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": ["vitalperiodicid"],
+                },
+            ]
+
+        if self.creatinine or self.bilirubin or self.platelets or self.wbc:
+            self.task_itemids = {
+                "creatinine": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["creatinine"],
+                },
+                "bilirubin": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["total bilirubin"],
+                },
+                "platelets": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["platelets x 1000"],
+                },
+                "wbc": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["WBC x 1000"],
+                },
+                "dialysis": {
+                    "fname": "intakeOutput" + self.ext,
+                    "timestamp": "intakeoutputoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "intakeoutputid",
+                        "intaketotal",
+                        "outputtotal",
+                        "nettotal",
+                        "intakeoutputentryoffset",
+                    ],
+                    "code": ["dialysistotal"],
+                    "value": [],
+                    "itemid": [],
+                },
+            }
+
+        self.disch_map_dict = {
+            "Home": "Home",
+            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
+            "Nursing Home": "Other",
+            "Other": "Other",
+            "Other External": "Other",
+            "Other Hospital": "Other",
+            "Rehabilitation": "Rehabilitation",
+            "Skilled Nursing Facility": "Skilled Nursing Facility",
+            "Death": "Death",
+        }
 
         self._icustay_key = "patientunitstayid"
         self._hadm_key = "patienthealthsystemstayid"
@@ -160,27 +253,59 @@ class eICU(EHR):
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         if self.diagnosis:
-            logger.info(
-                "Start labeling cohorts for diagnosis prediction."
-            )
+            logger.info("Start labeling cohorts for diagnosis prediction.")
 
             str2cat = self.make_dx_mapping()
             dx = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
-            dx = dx.merge(cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key)
+            dx = dx.merge(
+                cohorts[[self.icustay_key, self.hadm_key]], on=self.icustay_key
+            )
             dx["diagnosis"] = dx["diagnosisstring"].map(lambda x: str2cat.get(x, -1))
             # Ignore Rare Class(14)
             dx = dx[(dx["diagnosis"] != -1) & (dx["diagnosis"] != 14)]
-            dx.loc[dx['diagnosis']>=14, "diagnosis"] -= 1
+            dx.loc[dx["diagnosis"] >= 14, "diagnosis"] -= 1
             dx = (
-                dx.groupby(self.hadm_key)['diagnosis']
+                dx.groupby(self.hadm_key)["diagnosis"]
                 .agg(lambda x: list(set(x)))
                 .to_frame()
             )
+
             labeled_cohorts = labeled_cohorts.merge(dx, on=self.hadm_key, how="left")
+            labeled_cohorts["diagnosis"] = labeled_cohorts["diagnosis"].apply(
+                lambda x: [] if type(x) != list else x
+            )
+            # NaN case in diagnosis -> []
+
+        logger.info("Done preparing diagnosis prediction for the given cohorts")
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        logger.info("Done preparing diagnosis prediction for the given cohorts")
+        if self.bilirubin or self.platelets or self.creatinine or self.wbc:
+            logger.info("Start labeling cohorts for clinical task prediction.")
+
+            labeled_cohorts = spark.createDataFrame(labeled_cohorts)
+
+            if self.bilirubin:
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "bilirubin", spark
+                )
+
+            if self.platelets:
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "platelets", spark
+                )
+
+            if self.creatinine:
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "creatinine", spark
+                )
+
+            if self.wbc:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
+
+            # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
+
+            logger.info("Done preparing clinical task prediction for the given cohorts")
 
         return labeled_cohorts
 
@@ -209,10 +334,13 @@ class eICU(EHR):
         icustays.rename(columns={"hospitaldischargeoffset": "DISCHTIME"}, inplace=True)
 
         icustays["IN_ICU_MORTALITY"] = icustays["unitdischargestatus"] == "Expired"
-
-        icustays.rename(columns={
-            "hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"
-        }, inplace=True)
+        icustays["hospitaldischargelocation"] = icustays[
+            "hospitaldischargelocation"
+        ].map(self.disch_map_dict)
+        icustays.rename(
+            columns={"hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"},
+            inplace=True,
+        )
 
         return icustays
 
@@ -314,10 +442,152 @@ class eICU(EHR):
 
         return str2cat
 
+    def clinical_task(self, cohorts, task, spark):
+        fname = self.task_itemids[task]["fname"]
+        timestamp = self.task_itemids[task]["timestamp"]
+        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
+        excludes = self.task_itemids[task]["exclude"]
+        code = self.task_itemids[task]["code"][0]
+        value = self.task_itemids[task]["value"][0]
+        itemid = self.task_itemids[task]["itemid"]
+
+        table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+        table = table.drop(*excludes)
+        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
+
+        merge = cohorts.join(table, on=self.icustay_key, how="inner")
+
+        if task == "creatinine":
+            patient = spark.read.csv(
+                os.path.join(self.data_dir, self._icustay_fname), header=True
+            )
+            patient = patient.select(
+                *[self.patient_key, self.icustay_key, self._hadm_key]
+            )  # icuunit intime
+            multi_hosp = (
+                patient.groupBy(self.patient_key)
+                .agg(F.count(self._hadm_key).alias("count"))
+                .filter(F.col("count") > 1)
+                .select(self.patient_key)
+            )
+            # multiple hosp
+
+            dialysis_tables = self.task_itemids["dialysis"][
+                "fname"
+            ]  # Only treatment for dialysis
+            dialysis_code = self.task_itemids["dialysis"]["code"][0]
+            excludes = self.task_itemids["dialysis"]["exclude"]
+
+            io = spark.read.csv(
+                os.path.join(self.data_dir, dialysis_tables), header=True
+            )
+            io = io.drop(*excludes)
+
+            io_dialysis = io.filter(F.col(dialysis_code) != 0)
+            io_dialysis = io_dialysis.join(patient, on=self.icustay_key, how="left")
+
+            dialysis_multihosp = io_dialysis.join(
+                multi_hosp, on=self.patient_key, how="leftsemi"
+            ).select(self.patient_key)
+
+            io_dialysis = io_dialysis.drop(self.patient_key)
+
+            def dialysis_time(table, timecolumn):
+                return table.withColumn("_DIALYSIS_TIME", F.col(timecolumn)).select(
+                    self.icustay_key, "_DIALYSIS_TIME"
+                )
+
+            io_dialysis = dialysis_time(
+                io_dialysis, self.task_itemids["dialysis"]["timestamp"]
+            )
+            io_dialysis = io_dialysis.groupBy(self.icustay_key).agg(
+                F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME")
+            )
+            io_dialysis = io_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
+            merge = merge.join(io_dialysis, on=self.icustay_key, how="left")
+            merge = merge.filter(
+                F.isnull("_DIALYSIS_TIME")
+                | (F.col("_DIALYSIS_TIME") > F.col(timestamp))
+            )
+            merge = merge.drop("_DIALYSIS_TIME")
+
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
+
+        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size)
+        if self.rolling_from_last:
+            merge = merge.filter(
+                F.col(timestamp)
+                <= F.col("OUTTIME") + self.pred_size * 60 - self.gap_size * 60
+            ).filter(F.col(timestamp) >= F.col("OUTTIME"))
+
+        else:
+            merge = merge.filter(
+                ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
+            ).filter(((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
+
+        # Average value of events
+        value_agg = merge.groupBy(self.icustay_key).agg(
+            F.mean(value).alias("avg_value")
+        )  # TODO: mean/min/max?
+
+        # Labeling
+        if task == "bilirubin":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 1.2, 0)
+                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
+                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2)
+                .when((value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3)
+                .when(value_agg.avg_value >= 12.0, 4),
+            )
+        elif task == "platelets":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value >= 150, 0)
+                .when((value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1)
+                .when((value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2)
+                .when((value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3)
+                .when(value_agg.avg_value < 20, 4),
+            )
+
+        elif task == "creatinine":
+            value_agg = value_agg.join(
+                patient.select([self.patient_key, self.icustay_key]),
+                on=self.icustay_key,
+                how="left",
+            )
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 1.2, 0)
+                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
+                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2)
+                .when((value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3)
+                .when(value_agg.avg_value >= 5, 4),
+            )
+            value_agg = value_agg.join(
+                dialysis_multihosp, on=self.patient_key, how="leftanti"
+            )
+
+            value_agg = value_agg.drop(self.patient_key)
+
+        elif task == "wbc":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 4, 0)
+                .when((value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1)
+                .when((value_agg.avg_value > 12), 2),
+            )
+
+        cohorts = cohorts.join(
+            value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left"
+        )
+
+        return cohorts
+
     def infer_data_extension(self) -> str:
-        if (len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 31):
+        if len(glob.glob(os.path.join(self.data_dir, "*.csv.gz"))) == 31:
             ext = ".csv.gz"
-        elif (len(glob.glob(os.path.join(self.data_dir, "*.csv"))) == 31):
+        elif len(glob.glob(os.path.join(self.data_dir, "*.csv"))) == 31:
             ext = ".csv"
         else:
             raise AssertionError(
