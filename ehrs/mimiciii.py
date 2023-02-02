@@ -139,7 +139,7 @@ class MIMICIII(EHR):
         if self.emb_type =='codebase':
             feature_types_for_codebase_emb_dict ={
                 "LABEVENTS" + self.ext : {
-                    'numeric_feat': ['VALUE', 'FLAG'],
+                    'numeric_feat': ['VALUE', 'VALUENUM'],
                     'categorical_feat':[],
                     'code_feat':['ITEMID']
                 },

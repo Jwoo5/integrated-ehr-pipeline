@@ -38,7 +38,7 @@ class EHR(object):
                 + " which may ignore some arguments such as --first_icu, as well as task related arguments (--mortality, --los_3day, etc.)"
                 " If you want to avoid this, do not set --cache to True."
             )
-
+        
         self.data_dir = cfg.data
         self.ccs_path = cfg.ccs
         self.gem_path = cfg.gem
@@ -383,6 +383,7 @@ class EHR(object):
             
             fname = table["fname"]
             table_name = fname.split('/')[-1][: -len(self.ext)]
+
             timestamp_key = table["timestamp"]
             excludes = table["exclude"]
             obs_size = self.obs_size
@@ -445,6 +446,7 @@ class EHR(object):
                 events = events.drop(timestamp_key)
             elif table["timeoffsetunit"] == "min":
                 events = events.withColumn("TIME", F.col(timestamp_key).cast("int"))
+                events = events.drop(timestamp_key)
             else:
                 raise NotImplementedError()
 
@@ -473,10 +475,12 @@ class EHR(object):
                         not_numeric = events[pd.to_numeric(events[numeric_col], errors='coerce').isnull()]
                         
                         # buckettize
+                        
                         numeric.loc[:, numeric_col] = numeric.groupby(code_col)[numeric_col].transform(lambda x: x.rank(method = 'dense'))
                         numeric.loc[:, numeric_col]= numeric.groupby(code_col)[numeric_col].transform(lambda x: q_cut(x, self.bucket_num))
 
                         numeric.loc[:, numeric_col] = 'B_' + numeric[numeric_col].astype('str')
+                        
                         events = pd.concat([numeric, not_numeric], axis=0)
                 
                 # Categorical feature categorize
@@ -488,7 +492,7 @@ class EHR(object):
                 
                 table_feature_unique = []
                 for col in events.columns:
-                    if col in [self.icustay_key, "TIME"]:
+                    if col in [self.icustay_key, self.hadm_key, self.patient_key, 'TIME']:
                         continue
                     col_unique = list(events[col].unique())
                     table_feature_unique.extend(col_unique)
@@ -496,12 +500,12 @@ class EHR(object):
                 table_feature_unique = list(set(table_feature_unique))
                 
                 if len(events_dfs)==0:
-                    max_idx = 3
+                    max_idx = 3 +len(self.tables)
                     self.table_feature_dict = {k:idx+max_idx for idx, k in enumerate(table_feature_unique)}
                 else:
                     max_idx = max(self.table_feature_dict.values())
                     table_feature_unique = [
-                                            k for k in list(set(table_feature_unique)) 
+                                            k for k in table_feature_unique 
                                             if k not in self.table_feature_dict.keys()
                                             ]
                     self.table_feature_dict.update(
@@ -513,9 +517,18 @@ class EHR(object):
                 
                 encoded_table_name = ([3+table_index], [self.table_type_id], [0])
                 encoded_cols = {
-                    k: ([3+len(self.tables)+i], [self.column_type_id], [0]) 
-                        for i, k in enumerate(events.columns) if not k in [self.icustay_key, 'TIME']
+                    k: ([max(self.table_feature_dict.values())+1+i], [self.column_type_id], [0]) 
+                        for i, k in enumerate(events.columns) if not k in [self.icustay_key, self.hadm_key, self.patient_key, 'TIME']
                                 }
+                for i, k in enumerate(events.columns):
+                    if not k in [self.icustay_key, self.hadm_key, self.patient_key, 'TIME']:
+                        self.table_feature_dict[k] = max(self.table_feature_dict.values())+1+i
+                
+                print('length of codebook = ', len(self.table_feature_dict))
+                # for i, (k,v) in enumerate(self.table_feature_dict.items()):
+                #     print(k,v)
+                #     if i > 200:
+                #         break
                 
                 events=spark.createDataFrame(events)
                 print("Converted Events DataFrame to Pyspark DataFrame")
@@ -613,7 +626,7 @@ class EHR(object):
                 return F.udf(_process_row, returnType=schema)
             
             events = (
-                events.withColumn("tmp", process_row(encoded_table_name, encoded_cols)(F.struct(*events.columns)))
+            events.withColumn("tmp", process_row(encoded_table_name, encoded_cols)(F.struct(*events.columns)))
                     .withColumn("INPUTS", F.col("tmp.INPUTS"))
                     .withColumn("TYPES", F.col("tmp.TYPES"))
                     .withColumn("DPES", F.col("tmp.DPES"))

@@ -138,8 +138,8 @@ class MIMICIV(EHR):
                     'code_feat':['itemid']
                 },
                 "hosp/prescriptions" + self.ext: {
-                    'numeric_feat': ['dose_val_rx, from_val_disp, doses_per_24_hrs'],
-                    'categorical_feat':[],
+                    'numeric_feat': ['dose_val_rx', 'form_val_disp'],
+                    'categorical_feat':['doses_per_24_hrs'],
                     'code_feat':['drug']
                 },
                 "icu/inputevents" + self.ext: {
