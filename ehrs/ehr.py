@@ -122,6 +122,9 @@ class EHR(object):
         self.rolling_from_last = cfg.rolling_from_last
         self.data_sampling = cfg.data_sampling
         assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
+        self.preserve_nan = cfg.preserve_nan
+        self.skip_value = cfg.skip_value
+        assert not (cfg.skip_value and cfg.ehr!='mimiciv')
 
     @property
     def icustay_fname(self):
@@ -547,7 +550,15 @@ class EHR(object):
                     dpes += encoded_table_name[2]
                     encoded_table_name
                     for col, val in row.items():
-                        if col in [self.icustay_key, "TIME"] or val is None:
+                        if col in [self.icustay_key, "TIME"]:
+                            continue
+                        if val is None:
+                            if self.preserve_nan:
+                                val = "[unused1]"
+                            else:
+                                continue
+
+                        if self.skip_value and col in ['value', 'dose_val_rx', 'amount', 'valuenum']:
                             continue
                         encoded_col = encoded_cols[col]
                         encoded_val = process_unit(val, self.value_type_id)

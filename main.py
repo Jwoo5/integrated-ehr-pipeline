@@ -202,6 +202,14 @@ def get_parser():
     parser.add_argument(
         '--num_threads', type=int, default=8, help='number of threads to use'
     )
+
+    parser.add_argument(
+        '--preserve_nan', action='store_true',
+    )
+
+    parser.add_argument(
+        '--skip_value', action='store_true',
+    )
     return parser
 
 
