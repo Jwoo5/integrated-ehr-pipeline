@@ -50,9 +50,6 @@ class EHR(object):
         self.min_event_size = (
             cfg.min_event_size if cfg.min_event_size is not None else 1
         )
-        assert self.min_event_size > 0, (
-            "--min_event_size could not be negative or zero", self.min_event_size
-        )
         assert self.min_event_size <= self.max_event_size, (
             self.min_event_size,
             self.max_event_size,
@@ -125,6 +122,11 @@ class EHR(object):
         self.preserve_nan = cfg.preserve_nan
         self.skip_value = cfg.skip_value
         assert not (cfg.skip_value and cfg.ehr!='mimiciv')
+        if self.min_event_size!=0 and self.rolling_from_last:
+            logger.warn(
+                "--min_event_size is set to {} but --rolling_from_last is set to True. "
+                "This may cause some data to be ignored.".format(self.min_event_size)
+            )
 
     @property
     def icustay_fname(self):
@@ -611,8 +613,6 @@ class EHR(object):
                 max_obs_len = int(-((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size* 60))
                 hi_start = []
                 for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
-                    if np.searchsorted(df["TIME"].values, -obs_len + self.obs_size * 60) - np.searchsorted(df["TIME"].values, -obs_len) <= self.min_event_size:
-                        return events["TIME"].to_frame()
                     hi_start.append(np.searchsorted(df["TIME"].values, -obs_len))
                 # If LOS is exactly same with (obs_size+gap_size)*60
                 if len(hi_start)==0:
