@@ -98,7 +98,7 @@ def get_parser():
         "--obs_size", type=int, default=12, help="observation window size by the hour"
     )
     parser.add_argument(
-        "--gap_size", type=int, default=0, help="time gap window size by the hour"
+        "--gap_size", type=int, default=12, help="time gap window size by the hour"
     )
     parser.add_argument(
         "--pred_size", type=int, default=24, help="prediction window size by the hour"
@@ -175,7 +175,7 @@ def get_parser():
     )
 
     parser.add_argument(
-        '--max_event_token_len', type=int, default=128,
+        '--max_event_token_len', type=int, default=192,
         help='max token length for each event (Hierarchical)'
     )
 
@@ -188,7 +188,6 @@ def get_parser():
         '--num_threads', type=int, default=8, help='number of threads to use'
     )
     
-    
     # CodeEmb / Feature select
     parser.add_argument(
         '--emb_type', type=str, choices=['codebase', 'textbase'], default='textbase', 
@@ -199,6 +198,11 @@ def get_parser():
     )
     parser.add_argument(
         '--bucket_num', type=int, default=10, help='feature bucket num'
+    )
+    
+    # Only Lab tables
+    parser.add_argument(
+        '--lab_only', action="store_true", help='only lab table use'
     )
     return parser
 

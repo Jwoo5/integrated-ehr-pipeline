@@ -26,7 +26,9 @@ class EHR(object):
         self.cfg = cfg
 
         self.cache = cfg.cache
-        cache_dir = os.path.expanduser("~/.cache/ehr")
+        
+        #cache_dir = os.path.expanduser("~/.cache/ehr")
+        cache_dir = self.cfg.dest
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
         self.cache_dir = cache_dir
@@ -349,7 +351,7 @@ class EHR(object):
             labeled_cohorts = labeled_cohorts.drop(
                 columns=["IN_HOSPITAL_MORTALITY"]
             )
-
+        
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
             columns=[
@@ -377,10 +379,11 @@ class EHR(object):
             print("Converted Cohort to Pyspark DataFrame")
         else:
             logger.info("Start Preprocessing Tables")
-            
+        
+        if self.cfg.lab_only:
+            self.tables = [self.tables[0]]    
         events_dfs = []
         for table_index, table in enumerate(self.tables):
-            
             fname = table["fname"]
             table_name = fname.split('/')[-1][: -len(self.ext)]
 
@@ -475,11 +478,10 @@ class EHR(object):
                         not_numeric = events[pd.to_numeric(events[numeric_col], errors='coerce').isnull()]
                         
                         # buckettize
-                        
                         numeric.loc[:, numeric_col] = numeric.groupby(code_col)[numeric_col].transform(lambda x: x.rank(method = 'dense'))
                         numeric.loc[:, numeric_col]= numeric.groupby(code_col)[numeric_col].transform(lambda x: q_cut(x, self.bucket_num))
-
-                        numeric.loc[:, numeric_col] = 'B_' + numeric[numeric_col].astype('str')
+                        
+                        numeric[numeric_col] = 'B_' + numeric[code_col].astype('str') + '_' + numeric[numeric_col].astype('str')
                         
                         events = pd.concat([numeric, not_numeric], axis=0)
                 
@@ -529,7 +531,7 @@ class EHR(object):
                 #     print(k,v)
                 #     if i > 200:
                 #         break
-                
+                events = events.fillna(' ')
                 events=spark.createDataFrame(events)
                 print("Converted Events DataFrame to Pyspark DataFrame")
                 
@@ -609,7 +611,7 @@ class EHR(object):
                     dpes += encoded_table_name[2]
                     encoded_table_name
                     for col, val in row.items():
-                        if col in [self.icustay_key, "TIME"] or val is None:
+                        if col in [self.icustay_key, "TIME"] or val is None or val == ' ':
                             continue
                         encoded_col = encoded_cols[col]
                         encoded_val = process_unit(val, self.value_type_id)
