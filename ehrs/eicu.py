@@ -63,6 +63,7 @@ class eICU(EHR):
                 "timestamp": "labresultoffset",
                 "timeoffsetunit": "min",
                 "exclude": ["labid", "labresultrevisedoffset"],
+                "numeric": ["labresult", "labresulttext"]
             },
             {
                 "fname": "medication" + self.ext,
@@ -76,12 +77,14 @@ class eICU(EHR):
                     "drughiclseqno",
                     "drugordercancelled",
                 ],
+                "numeric": ["value"]
             },
             {
                 "fname": "infusionDrug" + self.ext,
                 "timestamp": "infusionoffset",
                 "timeoffsetunit": "min",
                 "exclude": ["infusiondrugid"],
+                "numeric": ["drugrate", "infusionrate", "drugamount", "volumeoffluid", "patientweight"]
             },
         ]
 

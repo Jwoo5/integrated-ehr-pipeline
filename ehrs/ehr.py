@@ -366,6 +366,7 @@ class EHR(object):
             
 
         events_dfs = []
+        vocab_dict = dict() 
         for table in self.tables:
             fname = table["fname"]
             table_name = fname.split('/')[-1][: -len(self.ext)]
@@ -487,6 +488,14 @@ class EHR(object):
             encoded_table_name = process_unit(table_name, self.table_type_id)
             encoded_cols = {k: process_unit(k, self.column_type_id) for k in events.columns}
 
+            # Create Predef Vocab Dictionary
+            vocab_dict[str(encoded_table_name[0])] = dict()
+            for col in events.columns:
+                if col in [self.icustay_key, "TIME"]:
+                    continue
+                numeric = 1 if col in table["numeric"] else 0
+                vocab_dict[str(encoded_table_name[0])][str(encoded_cols[col][0])] = ([], numeric)
+
             schema = StructType(
                 [
                     StructField("INPUTS", ArrayType(IntegerType()), False),
@@ -529,10 +538,10 @@ class EHR(object):
                     .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
             )
             events_dfs.append(events)
-        return reduce(lambda x, y: x.union(y), events_dfs)
+        return reduce(lambda x, y: x.union(y), events_dfs), vocab_dict
 
 
-    def make_input(self, cohorts, events, spark):
+    def make_input(self, cohorts, events, vocab_dict, spark):
         @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
         def _make_input(events):
             # Actually, this function does not have to return anything.
@@ -605,14 +614,95 @@ class EHR(object):
 
         for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
             stay_id = stay_id_file.split(".")[0]
+            if len(stay_id_file.split(".")) > 1:
+                ext = stay_id_file.split(".")[1]
+            else:
+                continue
+            if ext != "pkl":
+                continue
             with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
                 data = pickle.load(f)
+
+            # Create Predef Vocab Dictionary
+            if self.ehr_name == 'mimiciii':
+                exception = ['[2860, 11848, 1306, 5167]', '[2860, 2860, 11848, 1306]', '[2860, 2860, 11848, 1306, 5167]']
+            elif self.ehr_name == 'eicu':
+                exception = ['[8074, 4894, 7067, 17380, 8074, 3263, 2225, 22920, 16470, 5821, 13894, 1306]']
+            elif self.ehr_name == 'mimiciv':
+                exception = ['[2860, 11848, 1306, 1231, 2087, 168, 2079, 168, 2211]']
+            for itemid, typeid in zip(data['hi'][:, 0], data['hi'][:, 1]):
+                type_id = self.table_type_id
+                token_group = []
+                for itemtoken, typetoken in zip(itemid, typeid):
+                    if typetoken == self.cls_type_id:
+                        continue
+                    if typetoken == type_id:
+                        token_group.append(itemtoken)
+                    else:
+                        if type_id == self.table_type_id:
+                            table_name = str(token_group)
+                        elif type_id == self.column_type_id:
+                            column_name = str(token_group)
+                        elif type_id == self.value_type_id:
+                            try:
+                                if column_name in exception:
+                                    if self.ehr_name == 'mimiciv':
+                                        column_name = str(self.tokenizer.encode("".join(self.tokenizer.decode(eval(column_name)).split()[1:]))[1:-1])
+                                    else:
+                                        column_name = str(self.tokenizer.encode(self.tokenizer.decode(eval(column_name)).split()[-1])[1:-1])
+                                if str(token_group) not in vocab_dict[table_name][column_name][0]:
+                                    vocab_dict[table_name][column_name][0].append(str(token_group))
+                            except:
+                                breakpoint()
+                        type_id = typetoken
+                        token_group = [itemtoken]
+                        if typetoken == self.sep_type_id:
+                            break
+
             stay_g = ehr_g.create_group(str(stay_id))
             stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
             stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
             stay_g.create_dataset('time', data = data['time'], dtype='i')
             active_stay_ids.append(int(stay_id))
 
+        # Create Predef Vocab Dictionary
+        def is_number(s):
+            try:
+                convert_num = float(s)
+                return convert_num
+            except ValueError:
+                return False
+            
+        predef_vocab = dict()
+        for table in vocab_dict.keys():
+            tablename = self.tokenizer.decode(eval(table))
+            predef_vocab[tablename] = dict()
+            for column in vocab_dict[table].keys():
+                columnname = self.tokenizer.decode(eval(column))
+                numeric = vocab_dict[table][column][1]
+                if not numeric:
+                    predef_vocab[tablename][columnname] = ({"word": [], "subword": []}, numeric)
+                else:
+                    predef_vocab[tablename][columnname] = ([float('inf'), float('-inf')], numeric)
+                for value in vocab_dict[table][column][0]:
+                    if not numeric:
+                        predef_vocab[tablename][columnname][0]["word"].extend(list(set(self.tokenizer.decode(eval(value)).split())))
+                        predef_vocab[tablename][columnname][0]["subword"].extend(list(set([self.tokenizer.decode(v) for v in eval(value)])))
+                    else:
+                        num_val = is_number("".join(self.tokenizer.decode(eval(value)).split()))
+                        if isinstance(num_val, float):
+                            if num_val < predef_vocab[tablename][columnname][0][0]:
+                                predef_vocab[tablename][columnname][0][0] = num_val
+                            if num_val > predef_vocab[tablename][columnname][0][1]:
+                                predef_vocab[tablename][columnname][0][1] = num_val
+
+                if not numeric:
+                    predef_vocab[tablename][columnname][0]["word"] = list(set(predef_vocab[tablename][columnname][0]["word"]))
+                    predef_vocab[tablename][columnname][0]["subword"] = list(set(predef_vocab[tablename][columnname][0]["subword"]))
+        
+        with open(os.path.join(self.dest, f"{self.ehr_name}_predef_vocab.pickle"), 'wb') as handle:
+            pickle.dump(predef_vocab, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
         shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         # Drop patients with few events
 
@@ -653,8 +743,8 @@ class EHR(object):
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
-        events = self.process_tables(labeled_cohorts, spark)
-        self.make_input(labeled_cohorts, events, spark)
+        events, vocab_dict = self.process_tables(labeled_cohorts, spark)
+        self.make_input(labeled_cohorts, events, vocab_dict, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
