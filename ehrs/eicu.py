@@ -137,7 +137,7 @@ class eICU(EHR):
                 },
             ]
 
-        if self.creatinine or self.bilirubin or self.platelets or self.wbc:
+        if self.creatinine or self.bilirubin or self.platelets or self.wbc or self.hb or self.bicarbonate or self.sodium or self.antibiotics:
             self.task_itemids = {
                 "creatinine": {
                     "fname": "lab" + self.ext,
@@ -214,6 +214,100 @@ class eICU(EHR):
                     "value": [],
                     "itemid": [],
                 },
+                "hb": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["Hgb"],
+                },
+                "bicarbonate": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["bicarbonate"],
+                },
+                "sodium": {
+                    "fname": "lab" + self.ext,
+                    "timestamp": "labresultoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "labtypeid",
+                        "labresulttext",
+                        "labmeasurenamesystem",
+                        "labmeasurenameinterface",
+                        "labresultrevisedoffset",
+                    ],
+                    "code": ["labname"],
+                    "value": ["labresult"],
+                    "itemid": ["sodium"],
+                },
+                "antibiotics": {
+                    "fname": "medication" + self.ext,
+                    "timestamp": "drugstartoffset",
+                    "timeoffsetunit": "min",
+                    "exclude": [
+                        "medicationid",
+                        "drugorderoffset",
+                        "drugivadmixture",
+                        "drugordercancelled",
+                        "drughiclseqno",
+                        "dosage",
+                        "routeadmin",
+                        "frequency",
+                        "loadingdose",
+                        "prn",
+                        "drugstopoffset",
+                        "gtc",
+                    ],
+                    "code": ["drugname"],
+                    "itemid": [
+                        'ancef',
+                        'azithromycin',
+                        'bacitracin',
+                        'cefazolin',
+                        'cefepime',
+                        'ceftriaxone',
+                        'cipro',
+                        'ciprofloxacin',
+                        'clindamycin',
+                        'flagyl',
+                        'levaquin',
+                        'levofloxacin',
+                        'maxipime',
+                        'meropenem',
+                        'merrem',
+                        'metronidazole',
+                        'mupirocin',
+                        'nafcillin',
+                        'nystatin',
+                        'ofloxacin',
+                        'piperacillin',
+                        'piperacillin-tazobactam',
+                        'rocephin',
+                        'tazobactam',
+                        'vancocin',
+                        'vancomycin',
+                        'zosyn',
+                        ]
+                },
             }
 
         self.disch_map_dict = {
@@ -280,7 +374,7 @@ class eICU(EHR):
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        if self.bilirubin or self.platelets or self.creatinine or self.wbc:
+        if self.bilirubin or self.platelets or self.creatinine or self.wbc or self.hb or self.bicarbonate or self.sodium or self.antibiotics:
             logger.info("Start labeling cohorts for clinical task prediction.")
 
             labeled_cohorts = spark.createDataFrame(labeled_cohorts)
@@ -303,10 +397,32 @@ class eICU(EHR):
             if self.wbc:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
 
+            if self.hb:
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "hb", spark)
+
+            if self.bicarbonate:
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "bicarbonate", spark
+                )
+            
+            if self.sodium:
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "sodium", spark
+                )
+            
+            if self.antibiotics:
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "antibiotics", spark
+                )
+
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
 
+        if not isinstance(labeled_cohorts, pd.DataFrame):
+            labeled_cohorts = labeled_cohorts.toPandas()
+
+        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
         return labeled_cohorts
 
     def make_compatible(self, icustays):
@@ -448,12 +564,22 @@ class eICU(EHR):
         timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
         excludes = self.task_itemids[task]["exclude"]
         code = self.task_itemids[task]["code"][0]
-        value = self.task_itemids[task]["value"][0]
+        if "value" in self.task_itemids[task].keys():
+            value = self.task_itemids[task]["value"][0]
         itemid = self.task_itemids[task]["itemid"]
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
-        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
+        
+        if "value" in self.task_itemids[task].keys():
+            table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
+        else:
+            # Have to match regex
+            table = (
+                        table.dropna(subset=[code])
+                        .withColumn(code, (F.regexp_extract(F.lower(code), '('+"|".join(itemid)+')', 0)))
+                        .filter(f"{code} != ''")
+                    )
 
         merge = cohorts.join(table, on=self.icustay_key, how="inner")
 
@@ -526,10 +652,17 @@ class eICU(EHR):
             ).filter(((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
 
         # Average value of events
-        value_agg = merge.groupBy(self.icustay_key).agg(
-            F.mean(value).alias("avg_value")
-        )  # TODO: mean/min/max?
-
+        if "value" in self.task_itemids[task].keys():
+            value_agg = merge.groupBy(self.icustay_key).agg(
+                F.mean(value).alias("avg_value")
+            )  # TODO: mean/min/max?
+        else:
+            value_agg = merge.groupBy(self.icustay_key).agg(
+                    F.count(code).alias("event_count")
+                ).fillna(0, subset=["event_count"])
+            value_agg = (cohorts.select(self.icustay_key)
+                         .join(value_agg.select(self.icustay_key, "event_count"), on=self.icustay_key, how="left")
+                         .fillna(0, subset=["event_count"]))
         # Labeling
         if task == "bilirubin":
             value_agg = value_agg.withColumn(
@@ -576,6 +709,34 @@ class eICU(EHR):
                 F.when(value_agg.avg_value < 4, 0)
                 .when((value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1)
                 .when((value_agg.avg_value > 12), 2),
+            )
+
+        elif task == 'hb':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 8, 0).when(
+                    (value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1).when(
+                        (value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2).when(
+                            (value_agg.avg_value >= 12), 3)
+                )
+
+        elif task == 'bicarbonate':
+            value_agg = value_agg.withColumn(task,
+                F.when((value_agg.avg_value < 22), 0).when(
+                        (value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1).when(
+                            (value_agg.avg_value >= 29), 2)
+            )
+
+        elif task == 'sodium':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.avg_value < 135, 0).when(
+                    (value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1).when(
+                        (value_agg.avg_value >= 145), 2)
+            )
+
+        elif task == 'antibiotics':
+            value_agg = value_agg.withColumn(task,
+                F.when(value_agg.event_count < 1, 0).when(
+                    (value_agg.event_count >= 1), 1)
             )
 
         cohorts = cohorts.join(

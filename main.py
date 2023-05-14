@@ -161,6 +161,22 @@ def get_parser():
         "--wbc", action='store_true',
         help="whether to include blood white blood cell count task or not"
     )
+    parser.add_argument(
+        "--hb", action='store_true',
+        help="whether to include hemoglobin task or not"
+    )
+    parser.add_argument(
+        "--bicarbonate", action='store_true',
+        help="whether to include biocarbonate task or not"
+    )
+    parser.add_argument(
+        "--sodium", action='store_true',
+        help="whether to include sodium task or not"
+    )
+    parser.add_argument(
+        "--antibiotics", action='store_true',
+        help="whether to include antibiotics task or not"
+    )
 
 
     parser.add_argument(
@@ -222,8 +238,8 @@ def main(args):
     ehr = EHR_REGISTRY[args.ehr](args)
     spark = (
         SparkSession.builder.master(f"local[{args.num_threads}]")
-        .config("spark.driver.memory", "100g")
-        .config("spark.driver.maxResultSize", "10g")
+        .config("spark.driver.memory", "200g")
+        .config("spark.driver.maxResultSize", "20g")
         .config("spark.network.timeout", "100s")
         .appName("Main_Preprocess")
         .getOrCreate()

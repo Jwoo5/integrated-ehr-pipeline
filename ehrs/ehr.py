@@ -82,6 +82,10 @@ class EHR(object):
         self.bilirubin = cfg.bilirubin
         self.platelets = cfg.platelets
         self.wbc = cfg.wbc
+        self.hb = cfg.hb
+        self.bicarbonate = cfg.bicarbonate
+        self.sodium = cfg.sodium
+        self.antibiotics = cfg.antibiotics
 
         self.chunk_size = cfg.chunk_size
 
