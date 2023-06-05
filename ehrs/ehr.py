@@ -1,23 +1,19 @@
-import sys
+import logging
 import os
 import re
 import shutil
 import subprocess
-import logging
-import pickle
-import h5py
-
-import pandas as pd
-import numpy as np
-import pyspark.sql.functions as F
-
-from typing import Union, List
+import sys
 from functools import reduce
 from itertools import chain
-from transformers import AutoTokenizer
-from tqdm import tqdm
-from pyspark.sql.types import StructType, StructField, ArrayType, IntegerType
+from typing import List, Union
 
+import numpy as np
+import pandas as pd
+import pyspark.sql.functions as F
+from datasets import Dataset, Features, Sequence, Value
+from pyspark.sql.types import ArrayType, IntegerType, ShortType, StructField, StructType
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +39,8 @@ class EHR(object):
         self.ccs_path = cfg.ccs
         self.gem_path = cfg.gem
         self.ext = cfg.ext
+
+        self.num_threads = cfg.num_threads
 
         self.max_event_size = (
             cfg.max_event_size if cfg.max_event_size is not None else sys.maxsize
@@ -589,7 +587,17 @@ class EHR(object):
 
 
     def make_input(self, cohorts, events, spark):
-        @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
+        schema = StructType(
+                [   
+                    StructField("stay_id", IntegerType(), False),
+                    StructField("hi", ArrayType(ShortType()), False),
+                    StructField("fl", ArrayType(ShortType()), False),
+                    StructField("hi_start", ArrayType(IntegerType()), False),
+                    StructField("fl_start", ArrayType(IntegerType()), False),
+                    StructField("time", ArrayType(IntegerType()), False),
+                ]
+        )
+        @F.pandas_udf(returnType=schema, functionType=F.PandasUDFType.GROUPED_MAP)
         def _make_input(events):
             # Actually, this function does not have to return anything.
             # However, return something(TIME) is required to satisfy the PySpark requirements.
@@ -649,37 +657,40 @@ class EHR(object):
             hi_type = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_type])
             hi_dpe = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_dpe])
 
-            stay_id = df[self.icustay_key].values[0]
-            # Create caches (cannot write to hdf5 directly with pyspark)
-            data = {
-                "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
-                "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
+            stay_id = int(df[self.icustay_key].values[0])
+
+            hi = np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16).reshape(-1)
+            fl = np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16).reshape(-1)
+
+            return pd.DataFrame([{
+                "stay_id": stay_id,
+                "hi": hi,
+                "fl": fl,
                 "hi_start": hi_start,
                 "fl_start": fl_start,
-                "time": df["TIME"].values,
-            }
-            with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
-                pickle.dump(data, f)
-            return events["TIME"].to_frame()
+                "time": df["TIME"].values
+            }])
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+        processed = events.groupBy(self.icustay_key).apply(_make_input)
+        features = Features({
+            "stay_id": Value(dtype="int32"),
+            "hi": Sequence(feature=Value(dtype="int16")),
+            "fl": Sequence(feature=Value(dtype="int16")),
+            "hi_start": Sequence(feature=Value(dtype="int32")),
+            "fl_start": Sequence(feature=Value(dtype="int32")),
+            "time": Sequence(feature=Value(dtype="int32"))
+        })
+        dset = Dataset.from_spark(processed, features=features)
 
-        events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
-
-        logger.info("Finish Data Preprocessing. Start to write to hdf5")
-
-        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
-        ehr_g = f.create_group("ehr")
+        logger.info("Finish Data Preprocessing. Move to Datasets")
         
         if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
-        cohorts[['hi_start', 'fl_start', 'time']] = None
-
-        active_stay_ids = [int(i.split(".")[0]) for i in os.listdir(os.path.join(self.cache_dir, self.ehr_name))]        
-        logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
-        cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
-        cohorts.reset_index(drop=True, inplace=True)
+        processed_df = processed.select("stay_id", "hi_start", "fl_start", "time").toPandas()
+        previous_length = len(cohorts)
+        cohorts = pd.merge(cohorts, processed_df, on="stay_id", how="inner")
+        logger.info("Total {} patients in the cohort are skipped due to few events".format(previous_length - len(cohorts)))
+        
 
         # Should consider pat_id for split
         for seed in self.seed:
@@ -694,35 +705,21 @@ class EHR(object):
             cohorts.loc[cohorts[self.patient_key].isin(
                 shuffled[cum_len >= int(sum(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
 
-        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
-            stay_id = stay_id_file.split(".")[0]
-            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
-                data = pickle.load(f)
-            stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
-            stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
-            stay_g.create_dataset('time', data = data['time'], dtype='i')
-
-            
-            corresponding_idx = cohorts.index[cohorts[self.icustay_key]==int(stay_id)][0]
-            row = cohorts.loc[corresponding_idx]
+        def mapper(x):
+            stay_id = x['stay_id']
+            row = cohorts.loc[cohorts.index[cohorts[self.icustay_key]==stay_id][0]]
             for col in cohorts.columns:
                 if col in ["INTIME", "hi_start", "fl_start", "time"]:
                     continue
-                stay_g.attrs[col] = row[col]
+                x[col] = row[col]
+            x['hi'] = np.asarray(x['hi'], dtype=np.int16).reshape(-1, 3, self.max_event_token_len)
+            x['fl'] = np.asarray(x['fl'], dtype=np.int16).reshape(-1, 3)
+            return x
 
-            # If want to acceleate keys split in datasets, read df selectively
-            cohorts.at[corresponding_idx, 'hi_start'] = str(list(data['hi_start']))
-            cohorts.at[corresponding_idx, 'fl_start'] = str(list(data['fl_start']))
-            cohorts.at[corresponding_idx, 'time'] = str(list(data['time']))
-
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        dset = dset.map(mapper, num_proc=self.num_threads)
+        dset.save_to_disk(os.path.join(self.dest, f'{self.ehr_name}_dataset'))
         # Drop patients with few events
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
-
-        f.close()
         logger.info("Done encoding events.")
 
         return
