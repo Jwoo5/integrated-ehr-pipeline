@@ -551,7 +551,7 @@ class MIMICIV(EHR):
         # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
         if self.rolling_from_last:
             merge = merge.filter(
-                F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60 - self.gap_size * 60
+                F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60
             ).filter(F.col(timestamp)>= F.col("OUTTIME"))
 
         else:

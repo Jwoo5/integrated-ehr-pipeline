@@ -643,7 +643,7 @@ class eICU(EHR):
         if self.rolling_from_last:
             merge = merge.filter(
                 F.col(timestamp)
-                <= F.col("OUTTIME") + self.pred_size * 60 - self.gap_size * 60
+                <= F.col("OUTTIME") + self.pred_size * 60
             ).filter(F.col(timestamp) >= F.col("OUTTIME"))
 
         else:

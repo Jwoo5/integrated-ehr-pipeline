@@ -187,7 +187,10 @@ class EHR(object):
         obs_size = self.obs_size
         gap_size = self.gap_size
 
-        icustays = icustays[icustays["LOS"] >= (obs_size + gap_size) / 24]
+        if self.rolling_from_last:
+            icustays = icustays[icustays["LOS"] >= (gap_size) / 24]
+        else:
+            icustays = icustays[icustays["LOS"] >= (obs_size + gap_size) / 24]
         icustays = icustays[
             (self.min_age <= icustays["AGE"]) & (icustays["AGE"] <= self.max_age)
         ]
@@ -260,7 +263,7 @@ class EHR(object):
                         | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                     )
                     & (
-                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60 - self.gap_size * 60
+                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
                     )
                 )
             else:
@@ -285,10 +288,7 @@ class EHR(object):
                         | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                     )
                     & (
-                        self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
-                    )
-                    & (
-                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.long_term_pred_size * 60 - self.gap_size * 60
+                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.long_term_pred_size * 60
                     )
                 ).astype(int)
             else:
@@ -344,7 +344,7 @@ class EHR(object):
                 # define imminent discharge prediction task
                 if self.rolling_from_last:
                     is_discharged = (
-                        labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60 - self.gap_size * 60
+                        labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60
                     )
                 else:
                     is_discharged = (
