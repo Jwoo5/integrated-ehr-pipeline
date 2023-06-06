@@ -680,7 +680,7 @@ class EHR(object):
             "fl_start": Sequence(feature=Value(dtype="int32")),
             "time": Sequence(feature=Value(dtype="int32"))
         })
-        dset = Dataset.from_spark(processed, features=features)
+        dset = Dataset.from_spark(processed, features=features, cache_dir=self.cache_dir)
 
         logger.info("Finish Data Preprocessing. Move to Datasets")
         
@@ -716,7 +716,7 @@ class EHR(object):
             x['fl'] = np.asarray(x['fl'], dtype=np.int16).reshape(-1, 3)
             return x
 
-        dset = dset.map(mapper, num_proc=self.num_threads)
+        dset = dset.map(mapper, num_proc=self.num_threads, keep_in_memory=True)
         dset.save_to_disk(os.path.join(self.dest, f'{self.ehr_name}_dataset'))
         # Drop patients with few events
         cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
