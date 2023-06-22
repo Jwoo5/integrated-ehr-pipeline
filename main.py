@@ -206,6 +206,11 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--first_to_last", action='store_true',
+        help='input with first n hour, then pred last n hours (no gap)'
+    )
+
+    parser.add_argument(
         '--data_sampling', action='store_true',
         help='whether to perform data sampling or not'
     )

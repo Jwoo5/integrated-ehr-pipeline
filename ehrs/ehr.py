@@ -1,23 +1,21 @@
-import sys
+import logging
 import os
+import pickle
 import re
 import shutil
 import subprocess
-import logging
-import pickle
-import h5py
-
-import pandas as pd
-import numpy as np
-import pyspark.sql.functions as F
-
-from typing import Union, List
+import sys
 from functools import reduce
 from itertools import chain
-from transformers import AutoTokenizer
-from tqdm import tqdm
-from pyspark.sql.types import StructType, StructField, ArrayType, IntegerType
+from typing import List, Union
 
+import h5py
+import numpy as np
+import pandas as pd
+import pyspark.sql.functions as F
+from pyspark.sql.types import ArrayType, IntegerType, StructField, StructType
+from tqdm import tqdm
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +119,7 @@ class EHR(object):
         self._hadm_key = None
 
         self.rolling_from_last = cfg.rolling_from_last
+        self.first_to_last = cfg.first_to_last
         self.data_sampling = cfg.data_sampling
         assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
         self.preserve_nan = cfg.preserve_nan
@@ -186,9 +185,12 @@ class EHR(object):
 
         obs_size = self.obs_size
         gap_size = self.gap_size
+        pred_size = self.pred_size
 
         if self.rolling_from_last:
             icustays = icustays[icustays["LOS"] >= (gap_size) / 24]
+        elif self.first_to_last:
+            icustays = icustays[icustays["LOS"] >= (obs_size + pred_size) / 24]
         else:
             icustays = icustays[icustays["LOS"] >= (obs_size + gap_size) / 24]
         icustays = icustays[
@@ -243,10 +245,11 @@ class EHR(object):
             "DISCHTIME",
             "IN_ICU_MORTALITY",
             "HOS_DISCHARGE_LOCATION",
+            "LOS",
         ]].copy()
 
         # los prediction
-        if not self.rolling_from_last:
+        if not (self.rolling_from_last):
             labeled_cohorts["los_3day"] = (cohorts["LOS"] > 3).astype(int)
             labeled_cohorts["los_7day"] = (cohorts["LOS"] > 7).astype(int)
 
@@ -265,6 +268,11 @@ class EHR(object):
                     & (
                         labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
                     )
+                )
+            elif self.first_to_last:
+                # 그냥 mortality: in-icu mortality만
+                labeled_cohorts["mortality"] = (
+                    labeled_cohorts["IN_ICU_MORTALITY"] == 1
                 )
             else:
                 labeled_cohorts["mortality"] = (
@@ -311,7 +319,7 @@ class EHR(object):
             labeled_cohorts["los_7day"] = (labeled_cohorts["LOS"] > 7).astype(int)
 
         if self.final_acuity or self.imminent_discharge:
-
+            assert not self.first_to_last
             # if the discharge of 'Death' occurs in icu or hospital
             # we retain these cases for the imminent discharge task
             labeled_cohorts["IN_HOSPITAL_MORTALITY"] = (
@@ -479,10 +487,10 @@ class EHR(object):
                 raise NotImplementedError()
 
             if self.rolling_from_last:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= F.col("OUTTIME") - gap_size * 60)
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") < F.col("OUTTIME") - gap_size * 60)
                 events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
             else:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") <= obs_size * 60)
+                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") < obs_size * 60)
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
@@ -609,12 +617,14 @@ class EHR(object):
             event_length = min(event_length, self.max_event_size)
             df = df.iloc[-event_length:]
 
+            flatten_lens = [0] + list(flatten_lens + 1)
+
             if self.rolling_from_last:
                 # For icu len:
                 # Iteratively add hi_start and hi_end and time_len
                 # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
                 # Remove last n hours
-                max_obs_len = int(-((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size* 60))
+                max_obs_len = int(-((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size * 60))
                 hi_start = []
                 for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
                     hi_start.append(np.searchsorted(df["TIME"].values, -obs_len))
@@ -622,7 +632,14 @@ class EHR(object):
                 if len(hi_start)==0:
                     hi_start = [0]
                 # To allocate list to cell
-                fl_start = [flatten_lens[i-1]+1 for i in hi_start]
+                fl_start = [flatten_lens[i] for i in hi_start]
+            elif self.first_to_last:
+                hi_start = []
+                fl_start = []
+                for time in range(self.obs_size):
+                    event_idx = np.searchsorted(df["TIME"].values, time*60)
+                    hi_start.append(event_idx)
+                    fl_start.append(flatten_lens[event_idx])
             else:
                 if len(df)<=self.min_event_size:
                     return events["TIME"].to_frame()
@@ -656,6 +673,7 @@ class EHR(object):
                 "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
                 "hi_start": hi_start,
                 "fl_start": fl_start,
+                "fl_lens": flatten_lens,
                 "time": df["TIME"].values,
             }
             with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
@@ -674,7 +692,7 @@ class EHR(object):
         
         if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
-        cohorts[['hi_start', 'fl_start', 'time']] = None
+        cohorts[['hi_start', 'fl_start', 'time', "fl_lens"]] = None
 
         active_stay_ids = [int(i.split(".")[0]) for i in os.listdir(os.path.join(self.cache_dir, self.ehr_name))]        
         logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
@@ -703,19 +721,21 @@ class EHR(object):
             stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
             stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
             stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
+            stay_g.create_dataset('fl_lens', data=data['fl_lens'], dtype='i')
             stay_g.create_dataset('time', data = data['time'], dtype='i')
 
             
             corresponding_idx = cohorts.index[cohorts[self.icustay_key]==int(stay_id)][0]
             row = cohorts.loc[corresponding_idx]
             for col in cohorts.columns:
-                if col in ["INTIME", "hi_start", "fl_start", "time"]:
+                if col in ["INTIME", "hi_start", "fl_start", "fl_lens", "time"]:
                     continue
                 stay_g.attrs[col] = row[col]
 
             # If want to acceleate keys split in datasets, read df selectively
             cohorts.at[corresponding_idx, 'hi_start'] = str(list(data['hi_start']))
             cohorts.at[corresponding_idx, 'fl_start'] = str(list(data['fl_start']))
+            cohorts.at[corresponding_idx, 'fl_lens'] = str(list(data['fl_lens']))
             cohorts.at[corresponding_idx, 'time'] = str(list(data['time']))
 
         shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)

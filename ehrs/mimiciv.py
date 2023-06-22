@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pyspark.sql.functions as F
 import pyspark.sql.types as T
+from pyspark.sql.window import Window
 
 from ehrs import EHR, register_ehr
 
@@ -553,7 +554,10 @@ class MIMICIV(EHR):
             merge = merge.filter(
                 F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60
             ).filter(F.col(timestamp)>= F.col("OUTTIME"))
-
+        elif self.first_to_last:
+            merge = merge.filter(
+                F.col(timestamp) <= F.col("OUTTIME")
+            ).filter(F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60)
         else:
             merge = merge.filter(
                 ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
@@ -561,7 +565,11 @@ class MIMICIV(EHR):
 
         # Average value of events
         if "value" in self.task_itemids[task].keys():
-            value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+            if self.first_to_last:
+                window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
+                value_agg = merge.withColumn("row", F.row_number().over(window)).filter(F.col("row") == 1).drop("row").withColumnRenamed(value, "avg_value")
+            else:
+                value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
         else:
             value_agg = merge.groupBy(self.icustay_key).agg(F.count(code).alias("event_count"))
             value_agg = (cohorts.select(self.icustay_key)
