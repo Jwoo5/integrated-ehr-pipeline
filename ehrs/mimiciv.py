@@ -12,6 +12,7 @@ from ehrs import EHR, register_ehr
 
 logger = logging.getLogger(__name__)
 
+
 @register_ehr("mimiciv")
 class MIMICIV(EHR):
     def __init__(self, cfg):
@@ -29,8 +30,7 @@ class MIMICIV(EHR):
                     "Please log in to physionet.org with a credentialed user."
                 )
                 self.download_ehr_from_url(
-                    url="https://physionet.org/files/mimiciv/2.0/",
-                    dest=self.data_dir
+                    url="https://physionet.org/files/mimiciv/2.0/", dest=self.data_dir
                 )
 
         logger.info("Data directory is set to {}".format(self.data_dir))
@@ -66,12 +66,7 @@ class MIMICIV(EHR):
                 "fname": "hosp/labevents" + self.ext,
                 "timestamp": "charttime",
                 "timeoffsetunit": "abs",
-                "exclude": [
-                    "labevent_id",
-                    "storetime",
-                    "subject_id",
-                    "specimen_id"
-                ],
+                "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id"],
                 "code": ["itemid"],
                 "desc": ["hosp/d_labitems" + self.ext],
                 "desc_key": ["label"],
@@ -110,43 +105,100 @@ class MIMICIV(EHR):
             },
         ]
 
-        if self.creatinine or self.bilirubin or self.platelets or self.wbc or self.hb or self.bicarbonate or self.sodium or self.antibiotics:
+        if (
+            self.creatinine
+            or self.bilirubin
+            or self.platelets
+            or self.wbc
+            or self.hb
+            or self.bicarbonate
+            or self.sodium
+            or self.antibiotics
+        ):
             self.task_itemids = {
                 "creatinine": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
-                    "itemid": [50912]
+                    "itemid": [50912],
                 },
                 "bilirubin": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
-                    "itemid": [50885]
+                    "itemid": [50885],
                 },
                 "platelets": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
-                    "itemid": [51265]
+                    "itemid": [51265],
                 },
                 "wbc": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
-                    "itemid": [51300, 51301, 51755]
+                    "itemid": [51300, 51301, 51755],
                 },
                 "dialysis": {
                     "tables": {
@@ -154,20 +206,33 @@ class MIMICIV(EHR):
                             "fname": "icu/chartevents" + self.ext,
                             "timestamp": "charttime",
                             "timeoffsetunit": "abs",
-                            "include": ["subject_id", "itemid", "value","charttime"],
+                            "include": ["subject_id", "itemid", "value", "charttime"],
                             "itemid": {
-                                "ce": [226499, 224154, 225183, 227438, 224191, 225806, 225807, 228004, 228005, 228006, 224144, 224145, 224153, 226457]
-                            }
+                                "ce": [
+                                    226499,
+                                    224154,
+                                    225183,
+                                    227438,
+                                    224191,
+                                    225806,
+                                    225807,
+                                    228004,
+                                    228005,
+                                    228006,
+                                    224144,
+                                    224145,
+                                    224153,
+                                    226457,
+                                ]
+                            },
                         },
                         "inputevents": {
                             "fname": "icu/inputevents" + self.ext,
                             "timestamp": "starttime",
                             "timeoffsetunit": "abs",
                             "include": ["subject_id", "itemid", "amount", "starttime"],
-                            "itemid": {
-                                "ie": [227536, 227525]
-                            }
-                        }, 
+                            "itemid": {"ie": [227536, 227525]},
+                        },
                         "procedureevents": {
                             "fname": "icu/procedureevents" + self.ext,
                             "timestamp": "starttime",
@@ -175,15 +240,27 @@ class MIMICIV(EHR):
                             "include": ["subject_id", "itemid", "value", "starttime"],
                             "itemid": {
                                 "pe": [225441, 225802, 225803, 225805, 225809, 225955]
-                            }
-                        }
+                            },
+                        },
                     }
                 },
                 "hb": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
                     "itemid": [51222],
@@ -192,7 +269,19 @@ class MIMICIV(EHR):
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
                     "itemid": [50882],
@@ -201,7 +290,19 @@ class MIMICIV(EHR):
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
                     "timeoffsetunit": "abs",
-                    "exclude": ["labevent_id", "subject_id", "specimen_id", "storetime", "value", "valueuom", "ref_range_lower", "ref_range_upper", "flag", "priority", "comments"],
+                    "exclude": [
+                        "labevent_id",
+                        "subject_id",
+                        "specimen_id",
+                        "storetime",
+                        "value",
+                        "valueuom",
+                        "ref_range_lower",
+                        "ref_range_upper",
+                        "flag",
+                        "priority",
+                        "comments",
+                    ],
                     "code": ["itemid"],
                     "value": ["valuenum"],
                     "itemid": [50983],
@@ -211,14 +312,186 @@ class MIMICIV(EHR):
                     "timestamp": "starttime",
                     "timeoffsetunit": "abs",
                     "exclude": [
-                        "subject_id", "pharmacy_id", "poe_id", "poe_seq", "stoptime", "drug_type", "formulary_drug_cd", "gsn", "ndc", "prod_strength", "form_rx", "dose_val_rx", "dose_unit_rx", "form_val_disp", "form_unit_disp", "doses_per_24_hrs", "route"],
+                        "subject_id",
+                        "pharmacy_id",
+                        "poe_id",
+                        "poe_seq",
+                        "stoptime",
+                        "drug_type",
+                        "formulary_drug_cd",
+                        "gsn",
+                        "ndc",
+                        "prod_strength",
+                        "form_rx",
+                        "dose_val_rx",
+                        "dose_unit_rx",
+                        "form_val_disp",
+                        "form_unit_disp",
+                        "doses_per_24_hrs",
+                        "route",
+                    ],
                     "code": ["drug"],
-                    "itemid": ['adoxa', 'ala-tet', 'alodox', 'amikacin', 'amikin', 'amoxicill', 'amphotericin', 'anidulafungin', 'ancef', 'clavulanate', 'ampicillin', 'augmentin', 'avelox', 'avidoxy', 'azactam', 'azithromycin', 'aztreonam', 'axetil', 'bactocill', 'bactrim', 'bactroban', 'bethkis', 'biaxin', 'bicillin l-a', 'cayston', 'cefazolin', 'cedax', 'cefoxitin', 'ceftazidime', 'cefaclor', 'cefadroxil', 'cefdinir', 'cefditoren', 'cefepime', 'cefotan', 'cefotetan', 'cefotaxime', 'ceftaroline', 'cefpodoxime', 'cefpirome', 'cefprozil', 'ceftibuten', 'ceftin', 'ceftriaxone', 'cefuroxime', 'cephalexin', 'cephalothin', 'cephapririn', 'chloramphenicol', 'cipro', 'ciprofloxacin', 'claforan', 'clarithromycin', 'cleocin', 'clindamycin', 'cubicin', 'dicloxacillin', 'dirithromycin', 'doryx', 'doxycy', 'duricef', 'dynacin', 'ery-tab', 'eryped', 'eryc', 'erythrocin', 'erythromycin', 'factive', 'flagyl', 'fortaz', 'furadantin', 'garamycin', 'gentamicin', 'kanamycin', 'keflex', 'kefzol', 'ketek', 'levaquin', 'levofloxacin', 'lincocin', 'linezolid', 'macrobid', 'macrodantin', 'maxipime', 'mefoxin', 'metronidazole', 'meropenem', 'methicillin', 'minocin', 'minocycline', 'monodox', 'monurol', 'morgidox', 'moxatag', 'moxifloxacin', 'mupirocin', 'myrac', 'nafcillin', 'neomycin', 'nicazel doxy 30', 'nitrofurantoin', 'norfloxacin', 'noroxin', 'ocudox', 'ofloxacin', 'omnicef', 'oracea', 'oraxyl', 'oxacillin', 'pc pen vk', 'pce dispertab', 'panixine', 'pediazole', 'penicillin', 'periostat', 'pfizerpen', 'piperacillin', 'tazobactam', 'primsol', 'proquin', 'raniclor', 'rifadin', 'rifampin', 'rocephin', 'smz-tmp', 'septra', 'septra ds', 'septra', 'solodyn', 'spectracef', 'streptomycin', 'sulfadiazine', 'sulfamethoxazole', 'trimethoprim', 'sulfatrim', 'sulfisoxazole', 'suprax', 'synercid', 'tazicef', 'tetracycline', 'timentin', 'tobramycin', 'trimethoprim', 'unasyn', 'vancocin', 'vancomycin', 'vantin', 'vibativ', 'vibra-tabs', 'vibramycin', 'zinacef', 'zithromax', 'zosyn', 'zyvox'],
+                    "itemid": [
+                        "adoxa",
+                        "ala-tet",
+                        "alodox",
+                        "amikacin",
+                        "amikin",
+                        "amoxicill",
+                        "amphotericin",
+                        "anidulafungin",
+                        "ancef",
+                        "clavulanate",
+                        "ampicillin",
+                        "augmentin",
+                        "avelox",
+                        "avidoxy",
+                        "azactam",
+                        "azithromycin",
+                        "aztreonam",
+                        "axetil",
+                        "bactocill",
+                        "bactrim",
+                        "bactroban",
+                        "bethkis",
+                        "biaxin",
+                        "bicillin l-a",
+                        "cayston",
+                        "cefazolin",
+                        "cedax",
+                        "cefoxitin",
+                        "ceftazidime",
+                        "cefaclor",
+                        "cefadroxil",
+                        "cefdinir",
+                        "cefditoren",
+                        "cefepime",
+                        "cefotan",
+                        "cefotetan",
+                        "cefotaxime",
+                        "ceftaroline",
+                        "cefpodoxime",
+                        "cefpirome",
+                        "cefprozil",
+                        "ceftibuten",
+                        "ceftin",
+                        "ceftriaxone",
+                        "cefuroxime",
+                        "cephalexin",
+                        "cephalothin",
+                        "cephapririn",
+                        "chloramphenicol",
+                        "cipro",
+                        "ciprofloxacin",
+                        "claforan",
+                        "clarithromycin",
+                        "cleocin",
+                        "clindamycin",
+                        "cubicin",
+                        "dicloxacillin",
+                        "dirithromycin",
+                        "doryx",
+                        "doxycy",
+                        "duricef",
+                        "dynacin",
+                        "ery-tab",
+                        "eryped",
+                        "eryc",
+                        "erythrocin",
+                        "erythromycin",
+                        "factive",
+                        "flagyl",
+                        "fortaz",
+                        "furadantin",
+                        "garamycin",
+                        "gentamicin",
+                        "kanamycin",
+                        "keflex",
+                        "kefzol",
+                        "ketek",
+                        "levaquin",
+                        "levofloxacin",
+                        "lincocin",
+                        "linezolid",
+                        "macrobid",
+                        "macrodantin",
+                        "maxipime",
+                        "mefoxin",
+                        "metronidazole",
+                        "meropenem",
+                        "methicillin",
+                        "minocin",
+                        "minocycline",
+                        "monodox",
+                        "monurol",
+                        "morgidox",
+                        "moxatag",
+                        "moxifloxacin",
+                        "mupirocin",
+                        "myrac",
+                        "nafcillin",
+                        "neomycin",
+                        "nicazel doxy 30",
+                        "nitrofurantoin",
+                        "norfloxacin",
+                        "noroxin",
+                        "ocudox",
+                        "ofloxacin",
+                        "omnicef",
+                        "oracea",
+                        "oraxyl",
+                        "oxacillin",
+                        "pc pen vk",
+                        "pce dispertab",
+                        "panixine",
+                        "pediazole",
+                        "penicillin",
+                        "periostat",
+                        "pfizerpen",
+                        "piperacillin",
+                        "tazobactam",
+                        "primsol",
+                        "proquin",
+                        "raniclor",
+                        "rifadin",
+                        "rifampin",
+                        "rocephin",
+                        "smz-tmp",
+                        "septra",
+                        "septra ds",
+                        "septra",
+                        "solodyn",
+                        "spectracef",
+                        "streptomycin",
+                        "sulfadiazine",
+                        "sulfamethoxazole",
+                        "trimethoprim",
+                        "sulfatrim",
+                        "sulfisoxazole",
+                        "suprax",
+                        "synercid",
+                        "tazicef",
+                        "tetracycline",
+                        "timentin",
+                        "tobramycin",
+                        "trimethoprim",
+                        "unasyn",
+                        "vancocin",
+                        "vancomycin",
+                        "vantin",
+                        "vibativ",
+                        "vibra-tabs",
+                        "vibramycin",
+                        "zinacef",
+                        "zithromax",
+                        "zosyn",
+                        "zyvox",
+                    ],
                 },
             }
 
         if cfg.use_more_tables:
-            self.tables+=[
+            self.tables += [
                 {
                     "fname": "icu/chartevents" + self.ext,
                     "timestamp": "charttime",
@@ -257,7 +530,7 @@ class MIMICIV(EHR):
                         "spec_itemid",
                         "test_itemid",
                         "org_itemid",
-                        "ab_itemid"
+                        "ab_itemid",
                     ],
                 },
                 {
@@ -271,7 +544,7 @@ class MIMICIV(EHR):
                         "orderid",
                         "linkorderid",
                         "continueinnextdept",
-                        "statusdescription"
+                        "statusdescription",
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
@@ -321,9 +594,7 @@ class MIMICIV(EHR):
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         if self.diagnosis:
-            logger.info(
-                "Start labeling cohorts for diagnosis prediction."
-            )
+            logger.info("Start labeling cohorts for diagnosis prediction.")
 
             # define diagnosis prediction task
             diagnoses = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
@@ -334,58 +605,84 @@ class MIMICIV(EHR):
             ccs_dx["'ICD-9-CM CODE'"] = ccs_dx["'ICD-9-CM CODE'"].str[1:-1].str.strip()
             ccs_dx["'CCS LVL 1'"] = ccs_dx["'CCS LVL 1'"].str[1:-1]
             lvl1 = {
-                x: int(y)-1 for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
+                x: int(y) - 1
+                for _, (x, y) in ccs_dx[["'ICD-9-CM CODE'", "'CCS LVL 1'"]].iterrows()
             }
 
-            diagnoses['diagnosis'] = diagnoses['icd_code_converted'].map(lvl1)
+            diagnoses["diagnosis"] = diagnoses["icd_code_converted"].map(lvl1)
 
-            diagnoses = diagnoses[(diagnoses['diagnosis'].notnull()) & (diagnoses['diagnosis']!=14)]
-            diagnoses.loc[diagnoses['diagnosis']>=14, 'diagnosis'] -= 1
-            diagnoses = diagnoses.groupby(self.hadm_key)['diagnosis'].agg(lambda x: list(set(x))).to_frame()
+            diagnoses = diagnoses[
+                (diagnoses["diagnosis"].notnull()) & (diagnoses["diagnosis"] != 14)
+            ]
+            diagnoses.loc[diagnoses["diagnosis"] >= 14, "diagnosis"] -= 1
+            diagnoses = (
+                diagnoses.groupby(self.hadm_key)["diagnosis"]
+                .agg(lambda x: list(set(x)))
+                .to_frame()
+            )
 
-            labeled_cohorts = labeled_cohorts.merge(diagnoses, on=self.hadm_key, how='inner')
+            labeled_cohorts = labeled_cohorts.merge(
+                diagnoses, on=self.hadm_key, how="inner"
+            )
 
             logger.info("Done preparing diagnosis prediction for the given cohorts")
 
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        if self.bilirubin or self.platelets or self.creatinine or self.wbc or self.hb or self.bicarbonate or self.sodium or self.antibiotics:
-            logger.info(
-                "Start labeling cohorts for clinical task prediction."
-            )
+        if (
+            self.bilirubin
+            or self.platelets
+            or self.creatinine
+            or self.wbc
+            or self.hb
+            or self.bicarbonate
+            or self.sodium
+            or self.antibiotics
+        ):
+            logger.info("Start labeling cohorts for clinical task prediction.")
 
             labeled_cohorts = spark.createDataFrame(labeled_cohorts)
-            
+
             if self.bilirubin:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "bilirubin", spark)
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "bilirubin", spark
+                )
 
             if self.platelets:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "platelets", spark)
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "platelets", spark
+                )
 
             if self.creatinine:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "creatinine", spark)
-            
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "creatinine", spark
+                )
+
             if self.wbc:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
-            
+
             if self.hb:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "hb", spark)
-            
+
             if self.bicarbonate:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "bicarbonate", spark)
-            
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "bicarbonate", spark
+                )
+
             if self.sodium:
                 labeled_cohorts = self.clinical_task(labeled_cohorts, "sodium", spark)
-            
+
             if self.antibiotics:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "antibiotics", spark)
+                labeled_cohorts = self.clinical_task(
+                    labeled_cohorts, "antibiotics", spark
+                )
 
             # labeled_cohorts = labeled_cohorts.toPandas()
 
             # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
 
             logger.info("Done preparing clinical task prediction for the given cohorts")
-        
+
         if not isinstance(labeled_cohorts, pd.DataFrame):
             labeled_cohorts = labeled_cohorts.toPandas()
 
@@ -397,14 +694,18 @@ class MIMICIV(EHR):
         admissions = pd.read_csv(os.path.join(self.data_dir, self.admission_fname))
 
         # prepare icustays according to the appropriate format
-        icustays = icustays.rename(columns={
-            "los": "LOS",
-            "intime": "INTIME",
-            "outtime": "OUTTIME",
-        })
-        admissions = admissions.rename(columns={
-            "dischtime": "DISCHTIME",
-        })
+        icustays = icustays.rename(
+            columns={
+                "los": "LOS",
+                "intime": "INTIME",
+                "outtime": "OUTTIME",
+            }
+        )
+        admissions = admissions.rename(
+            columns={
+                "dischtime": "DISCHTIME",
+            }
+        )
 
         icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
         icustays.loc[:, "INTIME"] = pd.to_datetime(
@@ -422,9 +723,7 @@ class MIMICIV(EHR):
         )
 
         icustays = icustays.merge(
-            admissions[
-                [self.hadm_key, "discharge_location", "deathtime", "DISCHTIME"]
-            ],
+            admissions[[self.hadm_key, "discharge_location", "deathtime", "DISCHTIME"]],
             how="left",
             on=self.hadm_key,
         )
@@ -439,11 +738,19 @@ class MIMICIV(EHR):
             & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
             & (icustays["discharge_location"] == "Death")
         )
-        icustays["discharge_location"] = icustays["discharge_location"].map(self.disch_map_dict)
-        icustays.rename(columns={"discharge_location": "HOS_DISCHARGE_LOCATION"}, inplace=True)
+        icustays["discharge_location"] = icustays["discharge_location"].map(
+            self.disch_map_dict
+        )
+        icustays.rename(
+            columns={"discharge_location": "HOS_DISCHARGE_LOCATION"}, inplace=True
+        )
 
-        icustays["DISCHTIME"] = (icustays["DISCHTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
-        icustays["OUTTIME"] = (icustays["OUTTIME"] - icustays["INTIME"]).dt.total_seconds() // 60
+        icustays["DISCHTIME"] = (
+            icustays["DISCHTIME"] - icustays["INTIME"]
+        ).dt.total_seconds() // 60
+        icustays["OUTTIME"] = (
+            icustays["OUTTIME"] - icustays["INTIME"]
+        ).dt.total_seconds() // 60
 
         return icustays
 
@@ -485,9 +792,7 @@ class MIMICIV(EHR):
         )
         return dx
 
-
     def clinical_task(self, cohorts, task, spark):
-
         fname = self.task_itemids[task]["fname"]
         timestamp = self.task_itemids[task]["timestamp"]
         timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
@@ -500,10 +805,12 @@ class MIMICIV(EHR):
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
         if "value" in self.task_itemids[task].keys():
-            table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
+            table = table.filter(F.col(code).isin(itemid)).filter(
+                F.col(value).isNotNull()
+            )
         else:
             table = table.filter(F.lower(F.col(code)).isin(itemid))
-        
+
         merge = cohorts.join(table, on=self.hadm_key, how="inner")
         merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
 
@@ -512,52 +819,82 @@ class MIMICIV(EHR):
         # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/treatment/rrt.sql (Dialysis Active)
         if task == "creatinine":
             dialysis_tables = self.task_itemids["dialysis"]["tables"]
-            
-            chartevents = spark.read.csv(os.path.join(self.data_dir, "icu/chartevents" + self.ext), header=True)
-            inputevents = spark.read.csv(os.path.join(self.data_dir, "icu/inputevents" + self.ext), header=True)
-            procedureevents = spark.read.csv(os.path.join(self.data_dir, "icu/procedureevents" + self.ext), header=True)
-            
+
+            chartevents = spark.read.csv(
+                os.path.join(self.data_dir, "icu/chartevents" + self.ext), header=True
+            )
+            inputevents = spark.read.csv(
+                os.path.join(self.data_dir, "icu/inputevents" + self.ext), header=True
+            )
+            procedureevents = spark.read.csv(
+                os.path.join(self.data_dir, "icu/procedureevents" + self.ext),
+                header=True,
+            )
+
             chartevents = chartevents.select(*dialysis_tables["chartevents"]["include"])
             inputevents = inputevents.select(*dialysis_tables["inputevents"]["include"])
-            procedureevents = procedureevents.select(*dialysis_tables["procedureevents"]["include"])
+            procedureevents = procedureevents.select(
+                *dialysis_tables["procedureevents"]["include"]
+            )
 
             # Filter dialysis related tables with dialysis condition #TODO: check dialysis condition
-            ce = chartevents.filter((((F.col("itemid") == 225965) & (F.col("value") == "In use")) \
-                | (F.col("itemid").isin(dialysis_tables["chartevents"]["itemid"]["ce"])) & F.col("value").isNotNull())
+            ce = chartevents.filter(
+                (
+                    ((F.col("itemid") == 225965) & (F.col("value") == "In use"))
+                    | (
+                        F.col("itemid").isin(
+                            dialysis_tables["chartevents"]["itemid"]["ce"]
+                        )
+                    )
+                    & F.col("value").isNotNull()
+                )
             )
-            ie = inputevents.filter(F.col("itemid").isin(dialysis_tables["inputevents"]["itemid"]["ie"])).filter(F.col("amount") > 0)
-            pe = procedureevents.filter(F.col("itemid").isin(dialysis_tables["procedureevents"]["itemid"]["pe"])).filter(F.col("value").isNotNull())
+            ie = inputevents.filter(
+                F.col("itemid").isin(dialysis_tables["inputevents"]["itemid"]["ie"])
+            ).filter(F.col("amount") > 0)
+            pe = procedureevents.filter(
+                F.col("itemid").isin(dialysis_tables["procedureevents"]["itemid"]["pe"])
+            ).filter(F.col("value").isNotNull())
 
             # Extract Dialysis Times!
             def dialysis_time(table, timecolumn):
-                return (table
-                    .withColumn("_DIALYSIS_TIME", F.to_timestamp(timecolumn))
-                    .select(self.patient_key, "_DIALYSIS_TIME")
-                )
-            ce, ie, pe = dialysis_time(ce, "charttime"), dialysis_time(ie, "starttime"), dialysis_time(pe, "starttime")
+                return table.withColumn(
+                    "_DIALYSIS_TIME", F.to_timestamp(timecolumn)
+                ).select(self.patient_key, "_DIALYSIS_TIME")
+
+            ce, ie, pe = (
+                dialysis_time(ce, "charttime"),
+                dialysis_time(ie, "starttime"),
+                dialysis_time(pe, "starttime"),
+            )
             dialysis = ce.union(ie).union(pe)
-            dialysis = dialysis.groupby(self.patient_key).agg(F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"))
+            dialysis = dialysis.groupby(self.patient_key).agg(
+                F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME")
+            )
             merge = merge.join(dialysis, on=self.patient_key, how="left")
             # Only leave events with no dialysis / before first dialysis
-            merge = merge.filter(F.isnull("_DIALYSIS_TIME") | (F.col("_DIALYSIS_TIME") > F.col(timestamp)))
+            merge = merge.filter(
+                F.isnull("_DIALYSIS_TIME")
+                | (F.col("_DIALYSIS_TIME") > F.col(timestamp))
+            )
             merge = merge.drop("_DIALYSIS_TIME")
 
-        merge = (
-            merge.withColumn(
-                timestamp,
-                F.round((F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60)
-            )
+        merge = merge.withColumn(
+            timestamp,
+            F.round(
+                (F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60
+            ),
         )
 
         # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
         if self.rolling_from_last:
             merge = merge.filter(
                 F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60
-            ).filter(F.col(timestamp)>= F.col("OUTTIME"))
+            ).filter(F.col(timestamp) >= F.col("OUTTIME"))
         elif self.first_to_last:
-            merge = merge.filter(
-                F.col(timestamp) <= F.col("OUTTIME")
-            ).filter(F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60)
+            merge = merge.filter(F.col(timestamp) <= F.col("OUTTIME")).filter(
+                F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60
+            )
         else:
             merge = merge.filter(
                 ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
@@ -567,82 +904,107 @@ class MIMICIV(EHR):
         if "value" in self.task_itemids[task].keys():
             if self.first_to_last:
                 window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
-                value_agg = merge.withColumn("row", F.row_number().over(window)).filter(F.col("row") == 1).drop("row").withColumnRenamed(value, "avg_value")
+                value_agg = (
+                    merge.withColumn("row", F.row_number().over(window))
+                    .filter(F.col("row") == 1)
+                    .drop("row")
+                    .withColumnRenamed(value, "avg_value")
+                )
             else:
-                value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+                value_agg = merge.groupBy(self.icustay_key).agg(
+                    F.mean(value).alias("avg_value")
+                )  # TODO: mean/min/max?
         else:
-            value_agg = merge.groupBy(self.icustay_key).agg(F.count(code).alias("event_count"))
-            value_agg = (cohorts.select(self.icustay_key)
-                         .join(value_agg.select(self.icustay_key, "event_count"), on=self.icustay_key, how="left")
-                         .fillna(0, subset=["event_count"]))
+            value_agg = merge.groupBy(self.icustay_key).agg(
+                F.count(code).alias("event_count")
+            )
+            value_agg = (
+                cohorts.select(self.icustay_key)
+                .join(
+                    value_agg.select(self.icustay_key, "event_count"),
+                    on=self.icustay_key,
+                    how="left",
+                )
+                .fillna(0, subset=["event_count"])
+            )
         # Labeling
-        if task == 'bilirubin':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 1.2, 0).when(
-                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
-                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2).when(
-                            (value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3).when(
-                                value_agg.avg_value >= 12.0, 4)
-                )
-        elif task == 'platelets':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value >= 150, 0).when(
-                    (value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1).when(
-                        (value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2).when(
-                            (value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3).when(
-                                value_agg.avg_value < 20, 4)
-                )
+        if task == "bilirubin":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 1.2, 0)
+                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
+                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2)
+                .when((value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3)
+                .when(value_agg.avg_value >= 12.0, 4),
+            )
+        elif task == "platelets":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value >= 150, 0)
+                .when((value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1)
+                .when((value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2)
+                .when((value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3)
+                .when(value_agg.avg_value < 20, 4),
+            )
 
-        elif task == 'creatinine':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 1.2, 0).when(
-                    (value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1).when(
-                        (value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2).when(
-                            (value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3).when(
-                                value_agg.avg_value >= 5, 4)
-                )
+        elif task == "creatinine":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 1.2, 0)
+                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
+                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2)
+                .when((value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3)
+                .when(value_agg.avg_value >= 5, 4),
+            )
 
-        elif task == 'wbc':
+        elif task == "wbc":
             # NOTE: unit is mg/L
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 4, 0).when(
-                    (value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1).when(
-                        (value_agg.avg_value > 12), 2)
-                )
-        
-        elif task == 'hb':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 8, 0).when(
-                    (value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1).when(
-                        (value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2).when(
-                            (value_agg.avg_value >= 12), 3)
-                )
-
-        elif task == 'bicarbonate':
-            value_agg = value_agg.withColumn(task,
-                F.when((value_agg.avg_value < 22), 0).when(
-                        (value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1).when(
-                            (value_agg.avg_value >= 29), 2)
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 4, 0)
+                .when((value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1)
+                .when((value_agg.avg_value > 12), 2),
             )
 
-        elif task == 'sodium':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 135, 0).when(
-                    (value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1).when(
-                        (value_agg.avg_value >= 145), 2)
+        elif task == "hb":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 8, 0)
+                .when((value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1)
+                .when((value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2)
+                .when((value_agg.avg_value >= 12), 3),
             )
 
-        elif task == 'antibiotics':
-            value_agg = value_agg.withColumn(task,
+        elif task == "bicarbonate":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when((value_agg.avg_value < 22), 0)
+                .when((value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1)
+                .when((value_agg.avg_value >= 29), 2),
+            )
+
+        elif task == "sodium":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 135, 0)
+                .when((value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1)
+                .when((value_agg.avg_value >= 145), 2),
+            )
+
+        elif task == "antibiotics":
+            value_agg = value_agg.withColumn(
+                task,
                 F.when(value_agg.event_count < 1, 0).when(
-                    (value_agg.event_count >= 1), 1)
+                    (value_agg.event_count >= 1), 1
+                ),
             )
 
-        cohorts = cohorts.join(value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left")
+        cohorts = cohorts.join(
+            value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left"
+        )
 
         return cohorts
-    
-    
+
     def infer_data_extension(self) -> str:
         if (
             len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv.gz"))) == 21
@@ -650,8 +1012,8 @@ class MIMICIV(EHR):
         ):
             ext = ".csv.gz"
         elif (
-            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv")))==21
-            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv")))==8
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv"))) == 21
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv"))) == 8
         ):
             ext = ".csv"
         else:

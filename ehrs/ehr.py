@@ -19,6 +19,7 @@ from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
+
 class EHR(object):
     def __init__(self, cfg):
         self.cfg = cfg
@@ -89,7 +90,7 @@ class EHR(object):
 
         self.dest = cfg.dest
         self.valid_percent = cfg.valid_percent
-        self.seed = [int(s) for s in cfg.seed.replace(' ','').split(",")]
+        self.seed = [int(s) for s in cfg.seed.replace(" ", "").split(",")]
         assert 0 <= cfg.valid_percent and cfg.valid_percent <= 0.5
 
         self.bins = cfg.bins
@@ -97,7 +98,9 @@ class EHR(object):
         self.special_tokens_dict = dict()
         self.max_special_tokens = 100
 
-        self.tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            "emilyalsentzer/Bio_ClinicalBERT"
+        )
         self.cls_token_id = self.tokenizer.cls_token_id
         self.sep_token_id = self.tokenizer.sep_token_id
 
@@ -112,7 +115,7 @@ class EHR(object):
 
         self._icustay_fname = None
         self._patient_fname = None
-        self._admission_fname  = None
+        self._admission_fname = None
         self._diagnosis_fname = None
 
         self._icustay_key = None
@@ -121,11 +124,11 @@ class EHR(object):
         self.rolling_from_last = cfg.rolling_from_last
         self.first_to_last = cfg.first_to_last
         self.data_sampling = cfg.data_sampling
-        assert not (cfg.use_more_tables and cfg.ehr=='mimiciii')
+        assert not (cfg.use_more_tables and cfg.ehr == "mimiciii")
         self.preserve_nan = cfg.preserve_nan
         self.skip_value = cfg.skip_value
-        assert not (cfg.skip_value and cfg.ehr!='mimiciv')
-        if self.min_event_size!=0 and self.rolling_from_last:
+        assert not (cfg.skip_value and cfg.ehr != "mimiciv")
+        if self.min_event_size != 0 and self.rolling_from_last:
             logger.warn(
                 "--min_event_size is set to {} but --rolling_from_last is set to True. "
                 "This may cause some data to be ignored.".format(self.min_event_size)
@@ -134,15 +137,15 @@ class EHR(object):
     @property
     def icustay_fname(self):
         return self._icustay_fname
-    
+
     @property
     def patient_fname(self):
         return self._patient_fname
-    
+
     @property
     def admission_fname(self):
         return self._admission_fname
-    
+
     @property
     def diagnosis_fname(self):
         return self._diagnosis_fname
@@ -150,11 +153,11 @@ class EHR(object):
     @property
     def icustay_key(self):
         return self._icustay_key
-    
+
     @property
     def hadm_key(self):
         return self._hadm_key
-    
+
     @property
     def patient_key(self):
         return self._patient_key
@@ -175,13 +178,13 @@ class EHR(object):
 
         if not self.is_compatible(icustays):
             raise AssertionError(
-                "{} do not have required columns to build cohorts.".format(self.icustay_fname)
+                "{} do not have required columns to build cohorts.".format(
+                    self.icustay_fname
+                )
                 + " Please make sure that dataframe for icustays is compatible with other ehrs."
             )
 
-        logger.info(
-            "Start building cohorts for {}".format(self.ehr_name)
-        )
+        logger.info("Start building cohorts for {}".format(self.ehr_name))
 
         obs_size = self.obs_size
         gap_size = self.gap_size
@@ -201,12 +204,12 @@ class EHR(object):
         # since it requires to observe each next icustays,
         # which would have been excluded in the final cohorts
         icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
-        
+
         if self.readmission:
             icustays["readmission"] = 1
             icustays.loc[
                 icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
-                "readmission"
+                "readmission",
             ] = 0
         if self.first_icu:
             icustays = icustays.loc[
@@ -231,22 +234,22 @@ class EHR(object):
             else:
                 raise RuntimeError()
 
-        logger.info(
-            "Start labeling cohorts for predictive tasks."
-        )
+        logger.info("Start labeling cohorts for predictive tasks.")
 
-        labeled_cohorts = cohorts[[
-            self.hadm_key,
-            self.icustay_key,
-            self.patient_key,
-            "readmission",
-            "INTIME",
-            "OUTTIME",
-            "DISCHTIME",
-            "IN_ICU_MORTALITY",
-            "HOS_DISCHARGE_LOCATION",
-            "LOS",
-        ]].copy()
+        labeled_cohorts = cohorts[
+            [
+                self.hadm_key,
+                self.icustay_key,
+                self.patient_key,
+                "readmission",
+                "INTIME",
+                "OUTTIME",
+                "DISCHTIME",
+                "IN_ICU_MORTALITY",
+                "HOS_DISCHARGE_LOCATION",
+                "LOS",
+            ]
+        ].copy()
 
         # los prediction
         if not (self.rolling_from_last):
@@ -261,19 +264,15 @@ class EHR(object):
         if self.mortality:
             if self.rolling_from_last:
                 labeled_cohorts["mortality"] = (
-                    (
-                        (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
-                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                    )
-                    & (
-                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
-                    )
+                    (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
+                    | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
+                ) & (
+                    labeled_cohorts["DISCHTIME"]
+                    <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
                 )
             elif self.first_to_last:
                 # 그냥 mortality: in-icu mortality만
-                labeled_cohorts["mortality"] = (
-                    labeled_cohorts["IN_ICU_MORTALITY"] == 1
-                )
+                labeled_cohorts["mortality"] = labeled_cohorts["IN_ICU_MORTALITY"] == 1
             else:
                 labeled_cohorts["mortality"] = (
                     (
@@ -281,10 +280,12 @@ class EHR(object):
                         | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                     )
                     & (
-                        self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+                        self.obs_size * 60 + self.gap_size * 60
+                        < labeled_cohorts["DISCHTIME"]
                     )
                     & (
-                        labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60
+                        labeled_cohorts["DISCHTIME"]
+                        <= self.obs_size * 60 + self.pred_size * 60
                     )
                 ).astype(int)
 
@@ -296,7 +297,8 @@ class EHR(object):
                         | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                     )
                     & (
-                        labeled_cohorts["DISCHTIME"] <= labeled_cohorts["OUTTIME"] + self.long_term_pred_size * 60
+                        labeled_cohorts["DISCHTIME"]
+                        <= labeled_cohorts["OUTTIME"] + self.long_term_pred_size * 60
                     )
                 ).astype(int)
             else:
@@ -306,10 +308,12 @@ class EHR(object):
                         | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
                     )
                     & (
-                        self.obs_size * 60 + self.gap_size * 60 < labeled_cohorts["DISCHTIME"]
+                        self.obs_size * 60 + self.gap_size * 60
+                        < labeled_cohorts["DISCHTIME"]
                     )
                     & (
-                        labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.long_term_pred_size * 60
+                        labeled_cohorts["DISCHTIME"]
+                        <= self.obs_size * 60 + self.long_term_pred_size * 60
                     )
                 ).astype(int)
 
@@ -328,9 +332,10 @@ class EHR(object):
             ).astype(int)
 
             if self.final_acuity:
-
                 # define final acuity prediction task
-                labeled_cohorts["final_acuity"] = labeled_cohorts["HOS_DISCHARGE_LOCATION"]
+                labeled_cohorts["final_acuity"] = labeled_cohorts[
+                    "HOS_DISCHARGE_LOCATION"
+                ]
                 labeled_cohorts.loc[
                     labeled_cohorts["IN_ICU_MORTALITY"] == 1, "final_acuity"
                 ] = "IN_ICU_MORTALITY"
@@ -339,9 +344,16 @@ class EHR(object):
                 ] = "IN_HOSPITAL_MORTALITY"
                 # NOTE we drop null value samples #TODO
 
-                with open(os.path.join(self.dest, self.ehr_name + "_final_acuity_classes.tsv"), "w") as f:
+                with open(
+                    os.path.join(
+                        self.dest, self.ehr_name + "_final_acuity_classes.tsv"
+                    ),
+                    "w",
+                ) as f:
                     for i, cat in enumerate(
-                        labeled_cohorts["final_acuity"].astype("category").cat.categories
+                        labeled_cohorts["final_acuity"]
+                        .astype("category")
+                        .cat.categories
                     ):
                         print("{}\t{}".format(i, cat), file=f)
                 labeled_cohorts["final_acuity"] = (
@@ -352,51 +364,54 @@ class EHR(object):
                 # define imminent discharge prediction task
                 if self.rolling_from_last:
                     is_discharged = (
-                        labeled_cohorts['DISCHTIME'] <= labeled_cohorts['OUTTIME'] + self.pred_size * 60
+                        labeled_cohorts["DISCHTIME"]
+                        <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
                     )
                 else:
                     is_discharged = (
-                        (
-                            self.obs_size * 60 + self.gap_size * 60 <= labeled_cohorts["DISCHTIME"]
-                        )
-                        & (
-                            labeled_cohorts["DISCHTIME"] <= self.obs_size * 60 + self.pred_size * 60)
+                        self.obs_size * 60 + self.gap_size * 60
+                        <= labeled_cohorts["DISCHTIME"]
+                    ) & (
+                        labeled_cohorts["DISCHTIME"]
+                        <= self.obs_size * 60 + self.pred_size * 60
                     )
-                labeled_cohorts.loc[is_discharged, "imminent_discharge"] = labeled_cohorts.loc[
-                    is_discharged, "HOS_DISCHARGE_LOCATION"
-                ]
                 labeled_cohorts.loc[
-                    is_discharged & (
+                    is_discharged, "imminent_discharge"
+                ] = labeled_cohorts.loc[is_discharged, "HOS_DISCHARGE_LOCATION"]
+                labeled_cohorts.loc[
+                    is_discharged
+                    & (
                         (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
                         | (labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1)
                     ),
-                    "imminent_discharge"
+                    "imminent_discharge",
                 ] = "Death"
-                labeled_cohorts.loc[~is_discharged, "imminent_discharge"] = "No Discharge"
+                labeled_cohorts.loc[
+                    ~is_discharged, "imminent_discharge"
+                ] = "No Discharge"
                 # NOTE we drop null value samples #TODO
 
                 with open(
-                    os.path.join(self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"), "w"
+                    os.path.join(
+                        self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"
+                    ),
+                    "w",
                 ) as f:
                     for i, cat in enumerate(
-                        labeled_cohorts["imminent_discharge"].astype("category").cat.categories
+                        labeled_cohorts["imminent_discharge"]
+                        .astype("category")
+                        .cat.categories
                     ):
                         print("{}\t{}".format(i, cat), file=f)
                 labeled_cohorts["imminent_discharge"] = (
                     labeled_cohorts["imminent_discharge"].astype("category").cat.codes
                 )
 
-            labeled_cohorts = labeled_cohorts.drop(
-                columns=["IN_HOSPITAL_MORTALITY"]
-            )
+            labeled_cohorts = labeled_cohorts.drop(columns=["IN_HOSPITAL_MORTALITY"])
 
         # clean up unnecessary columns
         labeled_cohorts = labeled_cohorts.drop(
-            columns=[
-                "IN_ICU_MORTALITY",
-                "DISCHTIME",
-                "HOS_DISCHARGE_LOCATION"
-            ]
+            columns=["IN_ICU_MORTALITY", "DISCHTIME", "HOS_DISCHARGE_LOCATION"]
         )
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
@@ -405,22 +420,22 @@ class EHR(object):
 
         return labeled_cohorts
 
-
     def process_tables(self, cohorts, spark):
         # in: cohorts, sparksession
         # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
         if isinstance(cohorts, pd.DataFrame):
-            logger.info("Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts)))
+            logger.info(
+                "Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts))
+            )
             cohorts = spark.createDataFrame(cohorts)
             print("Converted Cohort to Pyspark DataFrame")
         else:
             logger.info("Start Preprocessing Tables")
-            
 
         events_dfs = []
         for table in self.tables:
             fname = table["fname"]
-            table_name = fname.split('/')[-1][: -len(self.ext)]
+            table_name = fname.split("/")[-1][: -len(self.ext)]
             timestamp_key = table["timestamp"]
             excludes = table["exclude"]
             obs_size = self.obs_size
@@ -453,33 +468,60 @@ class EHR(object):
                     )
 
             events = events.drop(*excludes)
-            if table["timeoffsetunit"]=='abs':
+            if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
 
             if infer_icustay_from_hadm_key:
                 events = events.join(
-                        cohorts.select(self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"),
-                        on=self.hadm_key, how="inner"
-                    )
-                if table["timeoffsetunit"] =='abs':
+                    cohorts.select(
+                        self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"
+                    ),
+                    on=self.hadm_key,
+                    how="inner",
+                )
+                if table["timeoffsetunit"] == "abs":
                     events = (
                         events.withColumn(
                             "TEMP_TIME",
-                            F.round((F.col(timestamp_key).cast("long") - F.col("INTIME").cast("long")) / 60)
-                        ).filter(F.col("TEMP_TIME") >= 0)
-                        .filter(F.col("TEMP_TIME")<=F.col("OUTTIME"))
+                            F.round(
+                                (
+                                    F.col(timestamp_key).cast("long")
+                                    - F.col("INTIME").cast("long")
+                                )
+                                / 60
+                            ),
+                        )
+                        .filter(F.col("TEMP_TIME") >= 0)
+                        .filter(F.col("TEMP_TIME") <= F.col("OUTTIME"))
                         .drop("TEMP_TIME")
                     )
                 else:
                     # All tables in eICU has icustay_key -> no need to handle
                     raise NotImplementedError()
-                events = events.join(cohorts.select(self.icustay_key), on=self.icustay_key, how='leftsemi')
+                events = events.join(
+                    cohorts.select(self.icustay_key),
+                    on=self.icustay_key,
+                    how="leftsemi",
+                )
 
             else:
-                events = events.join(cohorts.select(self.icustay_key, "INTIME", "OUTTIME"), on=self.icustay_key, how="inner")
+                events = events.join(
+                    cohorts.select(self.icustay_key, "INTIME", "OUTTIME"),
+                    on=self.icustay_key,
+                    how="inner",
+                )
 
-            if table["timeoffsetunit"] == 'abs':
-                events = events.withColumn("TIME", F.round((F.col(timestamp_key).cast("long") - F.col("INTIME").cast("long")) / 60))
+            if table["timeoffsetunit"] == "abs":
+                events = events.withColumn(
+                    "TIME",
+                    F.round(
+                        (
+                            F.col(timestamp_key).cast("long")
+                            - F.col("INTIME").cast("long")
+                        )
+                        / 60
+                    ),
+                )
                 events = events.drop(timestamp_key)
             elif table["timeoffsetunit"] == "min":
                 events = events.withColumn("TIME", F.col(timestamp_key).cast("int"))
@@ -487,22 +529,34 @@ class EHR(object):
                 raise NotImplementedError()
 
             if self.rolling_from_last:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") < F.col("OUTTIME") - gap_size * 60)
-                events = events.withColumn("TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60)
+                events = events.filter(F.col("TIME") >= 0).filter(
+                    F.col("TIME") < F.col("OUTTIME") - gap_size * 60
+                )
+                events = events.withColumn(
+                    "TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60
+                )
             else:
-                events = events.filter(F.col("TIME") >= 0).filter(F.col("TIME") < obs_size * 60)
+                events = events.filter(F.col("TIME") >= 0).filter(
+                    F.col("TIME") < obs_size * 60
+                )
 
             events = events.drop("INTIME", "OUTTIME", self.hadm_key)
 
             if code_to_descriptions:
                 for col in code_to_descriptions.keys():
-                    mapping_expr = F.create_map([F.lit(x) for x in chain(*code_to_descriptions[col].items())])
+                    mapping_expr = F.create_map(
+                        [F.lit(x) for x in chain(*code_to_descriptions[col].items())]
+                    )
                     events = events.withColumn(col, mapping_expr[F.col(col)])
 
             def process_unit(text, type_id):
                 # Given (table_name|col|val), generate ([inp], [type], [dpe])
-                text = re.sub(r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(text))
-                number_groups = [g for g in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", text)]
+                text = re.sub(
+                    r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(text)
+                )
+                number_groups = [
+                    g for g in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", text)
+                ]
                 text = re.sub(r"([0-9\.])", r" \1 ", text)
                 input_ids = self.tokenizer.encode(text, add_special_tokens=False)
                 types = [type_id] * len(input_ids)
@@ -520,7 +574,9 @@ class EHR(object):
                         start = numbers[numbers_cnt]
                         end = numbers[numbers_cnt + len(group[0]) - 1] + 1
                         corresponding_numbers = tokens[start:end]
-                        digits = [i for i, j in enumerate(corresponding_numbers) if j==119]
+                        digits = [
+                            i for i, j in enumerate(corresponding_numbers) if j == 119
+                        ]
 
                         # Case Integer
                         if len(digits) == 0:
@@ -532,7 +588,9 @@ class EHR(object):
                                 range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
                             )
                         else:
-                            logger.warn(f"{data_dpe[start:end]} has irregular numerical formats")
+                            logger.warn(
+                                f"{data_dpe[start:end]} has irregular numerical formats"
+                            )
 
                         numbers_cnt += len(group[0])
                     return data_dpe
@@ -541,7 +599,9 @@ class EHR(object):
                 return input_ids, types, dpes
 
             encoded_table_name = process_unit(table_name, self.table_type_id)
-            encoded_cols = {k: process_unit(k, self.column_type_id) for k in events.columns}
+            encoded_cols = {
+                k: process_unit(k, self.column_type_id) for k in events.columns
+            }
 
             schema = StructType(
                 [
@@ -550,6 +610,7 @@ class EHR(object):
                     StructField("DPES", ArrayType(IntegerType()), False),
                 ]
             )
+
             def process_row(encoded_table_name, encoded_cols):
                 def _process_row(row):
                     """
@@ -572,29 +633,45 @@ class EHR(object):
                             else:
                                 continue
 
-                        if self.skip_value and col in ['value', 'dose_val_rx', 'amount', 'valuenum']:
+                        if self.skip_value and col in [
+                            "value",
+                            "dose_val_rx",
+                            "amount",
+                            "valuenum",
+                        ]:
                             continue
                         encoded_col = encoded_cols[col]
                         encoded_val = process_unit(val, self.value_type_id)
-                        if len(input_ids) + len(encoded_col[0]) + len(encoded_val[0]) + 2 <= self.max_event_token_len:
+                        if (
+                            len(input_ids)
+                            + len(encoded_col[0])
+                            + len(encoded_val[0])
+                            + 2
+                            <= self.max_event_token_len
+                        ):
                             input_ids += encoded_col[0] + encoded_val[0]
                             types += encoded_col[1] + encoded_val[1]
                             dpes += encoded_col[2] + encoded_val[2]
                         else:
                             break
                     return input_ids, types, dpes
+
                 return F.udf(_process_row, returnType=schema)
 
             events = (
-                events.withColumn("tmp", process_row(encoded_table_name, encoded_cols)(F.struct(*events.columns)))
-                    .withColumn("INPUTS", F.col("tmp.INPUTS"))
-                    .withColumn("TYPES", F.col("tmp.TYPES"))
-                    .withColumn("DPES", F.col("tmp.DPES"))
-                    .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
+                events.withColumn(
+                    "tmp",
+                    process_row(encoded_table_name, encoded_cols)(
+                        F.struct(*events.columns)
+                    ),
+                )
+                .withColumn("INPUTS", F.col("tmp.INPUTS"))
+                .withColumn("TYPES", F.col("tmp.TYPES"))
+                .withColumn("DPES", F.col("tmp.DPES"))
+                .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
             )
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
-
 
     def make_input(self, cohorts, events, spark):
         @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
@@ -604,15 +681,19 @@ class EHR(object):
             df = events.sort_values("TIME")
             flatten_cut_idx = -1
             # Consider SEP
-            flatten_lens = np.cumsum(df["INPUTS"].str.len()+1).values
+            flatten_lens = np.cumsum(df["INPUTS"].str.len() + 1).values
             event_length = len(df)
 
-            if flatten_lens[-1] > self.max_patient_token_len-1:
+            if flatten_lens[-1] > self.max_patient_token_len - 1:
                 # Consider CLS token at first of the flatten input
-                flatten_cut_idx = np.searchsorted(flatten_lens, flatten_lens[-1]-self.max_patient_token_len+1)
-                flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[flatten_cut_idx+1:]
+                flatten_cut_idx = np.searchsorted(
+                    flatten_lens, flatten_lens[-1] - self.max_patient_token_len + 1
+                )
+                flatten_lens = (flatten_lens - flatten_lens[flatten_cut_idx])[
+                    flatten_cut_idx + 1 :
+                ]
                 event_length = len(flatten_lens)
-            
+
             # Event length should not be longer than max_event_size
             event_length = min(event_length, self.max_event_size)
             df = df.iloc[-event_length:]
@@ -624,12 +705,16 @@ class EHR(object):
                 # Iteratively add hi_start and hi_end and time_len
                 # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
                 # Remove last n hours
-                max_obs_len = int(-((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size * 60))
+                max_obs_len = int(
+                    -((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size * 60)
+                )
                 hi_start = []
-                for obs_len in range(self.obs_size * 60, max_obs_len, self.obs_size * 60):
+                for obs_len in range(
+                    self.obs_size * 60, max_obs_len, self.obs_size * 60
+                ):
                     hi_start.append(np.searchsorted(df["TIME"].values, -obs_len))
                 # If LOS is exactly same with (obs_size+gap_size)*60
-                if len(hi_start)==0:
+                if len(hi_start) == 0:
                     hi_start = [0]
                 # To allocate list to cell
                 fl_start = [flatten_lens[i] for i in hi_start]
@@ -637,18 +722,22 @@ class EHR(object):
                 hi_start = []
                 fl_start = []
                 for time in range(self.obs_size):
-                    event_idx = np.searchsorted(df["TIME"].values, time*60)
+                    event_idx = np.searchsorted(df["TIME"].values, time * 60)
                     hi_start.append(event_idx)
                     fl_start.append(flatten_lens[event_idx])
             else:
-                if len(df)<=self.min_event_size:
+                if len(df) <= self.min_event_size:
                     return events["TIME"].to_frame()
                 hi_start = 0
                 fl_start = 0
 
-            make_hi = lambda cls_id, sep_id, iterable: [[cls_id] + list(i) + [sep_id] for i in iterable]
-            make_fl = lambda cls_id, sep_id, iterable: [cls_id] + list(chain(*[list(i) + [sep_id] for i in iterable]))
-            
+            make_hi = lambda cls_id, sep_id, iterable: [
+                [cls_id] + list(i) + [sep_id] for i in iterable
+            ]
+            make_fl = lambda cls_id, sep_id, iterable: [cls_id] + list(
+                chain(*[list(i) + [sep_id] for i in iterable])
+            )
+
             hi_input = make_hi(self.cls_token_id, self.sep_token_id, df["INPUTS"])
             hi_type = make_hi(self.cls_type_id, self.sep_type_id, df["TYPES"])
             hi_dpe = make_hi(self.others_dpe_id, self.others_dpe_id, df["DPES"])
@@ -658,13 +747,28 @@ class EHR(object):
             fl_dpe = make_fl(self.others_dpe_id, self.others_dpe_id, df["DPES"])
 
             assert len(hi_input) <= self.max_event_size, hi_input
-            assert all([len(i)<=self.max_event_token_len for i in hi_input]), hi_input
+            assert all([len(i) <= self.max_event_token_len for i in hi_input]), hi_input
             assert len(fl_input) <= self.max_patient_token_len, fl_input
 
             # Add padding to save as numpy array
-            hi_input = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_input])
-            hi_type = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_type])
-            hi_dpe = np.array([np.pad(i, (0, self.max_event_token_len - len(i)), mode='constant') for i in hi_dpe])
+            hi_input = np.array(
+                [
+                    np.pad(i, (0, self.max_event_token_len - len(i)), mode="constant")
+                    for i in hi_input
+                ]
+            )
+            hi_type = np.array(
+                [
+                    np.pad(i, (0, self.max_event_token_len - len(i)), mode="constant")
+                    for i in hi_type
+                ]
+            )
+            hi_dpe = np.array(
+                [
+                    np.pad(i, (0, self.max_event_token_len - len(i)), mode="constant")
+                    for i in hi_dpe
+                ]
+            )
 
             stay_id = df[self.icustay_key].values[0]
             # Create caches (cannot write to hdf5 directly with pyspark)
@@ -676,56 +780,96 @@ class EHR(object):
                 "fl_lens": flatten_lens,
                 "time": df["TIME"].values,
             }
-            with open(os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb") as f:
+            with open(
+                os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb"
+            ) as f:
                 pickle.dump(data, f)
             return events["TIME"].to_frame()
 
         shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
 
-        events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
+        events.groupBy(self.icustay_key).apply(_make_input).write.mode(
+            "overwrite"
+        ).format("noop").save()
 
         logger.info("Finish Data Preprocessing. Start to write to hdf5")
 
         f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
         ehr_g = f.create_group("ehr")
-        
+
         if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
-        cohorts[['hi_start', 'fl_start', 'time', "fl_lens"]] = None
+        cohorts[["hi_start", "fl_start", "time", "fl_lens"]] = None
 
-        active_stay_ids = [int(i.split(".")[0]) for i in os.listdir(os.path.join(self.cache_dir, self.ehr_name))]        
-        logger.info("Total {} patients in the cohort are skipped due to few events".format(len(cohorts) - len(active_stay_ids)))
+        active_stay_ids = [
+            int(i.split(".")[0])
+            for i in os.listdir(os.path.join(self.cache_dir, self.ehr_name))
+        ]
+        logger.info(
+            "Total {} patients in the cohort are skipped due to few events".format(
+                len(cohorts) - len(active_stay_ids)
+            )
+        )
         cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
         cohorts.reset_index(drop=True, inplace=True)
 
         # Should consider pat_id for split
         for seed in self.seed:
-            shuffled = cohorts.groupby(self.patient_key)[self.patient_key].count().sample(frac=1, random_state=seed)
+            shuffled = (
+                cohorts.groupby(self.patient_key)[self.patient_key]
+                .count()
+                .sample(frac=1, random_state=seed)
+            )
             cum_len = shuffled.cumsum()
 
-            cohorts.loc[cohorts[self.patient_key].isin(
-                shuffled[cum_len < int(sum(shuffled)*self.valid_percent)].index), f'split_{seed}'] = 'test'
-            cohorts.loc[cohorts[self.patient_key].isin(
-                shuffled[(cum_len >= int(sum(shuffled)*self.valid_percent)) 
-                & (cum_len < int(sum(shuffled)*2*self.valid_percent))].index), f'split_{seed}'] = 'valid'
-            cohorts.loc[cohorts[self.patient_key].isin(
-                shuffled[cum_len >= int(sum(shuffled)*2*self.valid_percent)].index), f'split_{seed}'] = 'train'
+            cohorts.loc[
+                cohorts[self.patient_key].isin(
+                    shuffled[cum_len < int(sum(shuffled) * self.valid_percent)].index
+                ),
+                f"split_{seed}",
+            ] = "test"
+            cohorts.loc[
+                cohorts[self.patient_key].isin(
+                    shuffled[
+                        (cum_len >= int(sum(shuffled) * self.valid_percent))
+                        & (cum_len < int(sum(shuffled) * 2 * self.valid_percent))
+                    ].index
+                ),
+                f"split_{seed}",
+            ] = "valid"
+            cohorts.loc[
+                cohorts[self.patient_key].isin(
+                    shuffled[
+                        cum_len >= int(sum(shuffled) * 2 * self.valid_percent)
+                    ].index
+                ),
+                f"split_{seed}",
+            ] = "train"
 
-        for stay_id_file in tqdm(os.listdir(os.path.join(self.cache_dir, self.ehr_name))):
+        for stay_id_file in tqdm(
+            os.listdir(os.path.join(self.cache_dir, self.ehr_name))
+        ):
             stay_id = stay_id_file.split(".")[0]
-            with open(os.path.join(self.cache_dir, self.ehr_name, stay_id_file), 'rb') as f:
+            with open(
+                os.path.join(self.cache_dir, self.ehr_name, stay_id_file), "rb"
+            ) as f:
                 data = pickle.load(f)
             stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset('hi', data=data['hi'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('fl', data=data['fl'], dtype='i2', compression='lzf', shuffle=True)
-            stay_g.create_dataset('hi_start', data=data['hi_start'], dtype='i')
-            stay_g.create_dataset('fl_start', data=data['fl_start'], dtype='i')
-            stay_g.create_dataset('fl_lens', data=data['fl_lens'], dtype='i')
-            stay_g.create_dataset('time', data = data['time'], dtype='i')
+            stay_g.create_dataset(
+                "hi", data=data["hi"], dtype="i2", compression="lzf", shuffle=True
+            )
+            stay_g.create_dataset(
+                "fl", data=data["fl"], dtype="i2", compression="lzf", shuffle=True
+            )
+            stay_g.create_dataset("hi_start", data=data["hi_start"], dtype="i")
+            stay_g.create_dataset("fl_start", data=data["fl_start"], dtype="i")
+            stay_g.create_dataset("fl_lens", data=data["fl_lens"], dtype="i")
+            stay_g.create_dataset("time", data=data["time"], dtype="i")
 
-            
-            corresponding_idx = cohorts.index[cohorts[self.icustay_key]==int(stay_id)][0]
+            corresponding_idx = cohorts.index[
+                cohorts[self.icustay_key] == int(stay_id)
+            ][0]
             row = cohorts.loc[corresponding_idx]
             for col in cohorts.columns:
                 if col in ["INTIME", "hi_start", "fl_start", "fl_lens", "time"]:
@@ -733,14 +877,16 @@ class EHR(object):
                 stay_g.attrs[col] = row[col]
 
             # If want to acceleate keys split in datasets, read df selectively
-            cohorts.at[corresponding_idx, 'hi_start'] = str(list(data['hi_start']))
-            cohorts.at[corresponding_idx, 'fl_start'] = str(list(data['fl_start']))
-            cohorts.at[corresponding_idx, 'fl_lens'] = str(list(data['fl_lens']))
-            cohorts.at[corresponding_idx, 'time'] = str(list(data['time']))
+            cohorts.at[corresponding_idx, "hi_start"] = str(list(data["hi_start"]))
+            cohorts.at[corresponding_idx, "fl_start"] = str(list(data["fl_start"]))
+            cohorts.at[corresponding_idx, "fl_lens"] = str(list(data["fl_lens"]))
+            cohorts.at[corresponding_idx, "time"] = str(list(data["time"]))
 
         shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         # Drop patients with few events
-        cohorts.to_csv(os.path.join(self.dest, f'{self.ehr_name}_cohort.csv'), index=False)
+        cohorts.to_csv(
+            os.path.join(self.dest, f"{self.ehr_name}_cohort.csv"), index=False
+        )
 
         f.close()
         logger.info("Done encoding events.")
@@ -776,10 +922,12 @@ class EHR(object):
             )
             return None
 
-        self.special_tokens_dict.update({
-            k: "[unused{}]".format(i)
-            for i, k in enumerate(new_special_tokens, start=num_special_tokens+1)
-        })
+        self.special_tokens_dict.update(
+            {
+                k: "[unused{}]".format(i)
+                for i, k in enumerate(new_special_tokens, start=num_special_tokens + 1)
+            }
+        )
 
     def make_compatible(self, icustays):
         """
@@ -800,7 +948,7 @@ class EHR(object):
             "OUTTIME",
             "DISCHTIME",
             "IN_ICU_MORTALITY",
-            "HOS_DISCHARGE_LOCATION"
+            "HOS_DISCHARGE_LOCATION",
         ]
         for item in checklist:
             if item not in icustays.columns.to_list():
@@ -810,21 +958,18 @@ class EHR(object):
     def save_to_cache(self, f, fname, use_pickle=False) -> None:
         if use_pickle:
             import pickle
+
             with open(os.path.join(self.cache_dir, fname), "wb") as fptr:
                 pickle.dump(f, fptr)
         else:
-            f.to_pickle(
-                os.path.join(self.cache_dir, fname)
-            )
+            f.to_pickle(os.path.join(self.cache_dir, fname))
 
     def load_from_cache(self, fname):
         cached = os.path.join(self.cache_dir, fname)
         if os.path.exists(cached):
             data = pd.read_pickle(cached)
 
-            logger.info(
-                "Loaded data from {}".format(cached)
-            )
+            logger.info("Loaded data from {}".format(cached))
             return data
         else:
             return None
@@ -836,10 +981,17 @@ class EHR(object):
         username = input("Email or Username: ")
         subprocess.run(
             [
-                "wget", "-r", "-N", "-c", "np",
-                "--user", username,
-                "--ask-password", url,
-                "-P", dest,
+                "wget",
+                "-r",
+                "-N",
+                "-c",
+                "np",
+                "--user",
+                username,
+                "--ask-password",
+                url,
+                "-P",
+                dest,
             ]
         )
         output_dir = url.replace("https://", "").replace("http://", "")
@@ -853,9 +1005,12 @@ class EHR(object):
     def download_ccs_from_url(self, dest) -> None:
         subprocess.run(
             [
-                "wget", "-N", "-c",
+                "wget",
+                "-N",
+                "-c",
                 "https://www.hcup-us.ahrq.gov/toolssoftware/ccs/Multi_Level_CCS_2015.zip",
-                "-P", dest
+                "-P",
+                dest,
             ]
         )
 
@@ -867,7 +1022,7 @@ class EHR(object):
             zip_ref.extractall(os.path.join(dest, "foo.d"))
         os.rename(
             os.path.join(dest, "foo.d", "ccs_multi_dx_tool_2015.csv"),
-            os.path.join(dest, "ccs_multi_dx_tool_2015.csv")
+            os.path.join(dest, "ccs_multi_dx_tool_2015.csv"),
         )
         os.remove(os.path.join(dest, "Multi_Level_CCS_2015.zip"))
         shutil.rmtree(os.path.join(dest, "foo.d"))
@@ -875,8 +1030,11 @@ class EHR(object):
     def download_icdgem_from_url(self, dest) -> None:
         subprocess.run(
             [
-                "wget", "-N", "-c",
+                "wget",
+                "-N",
+                "-c",
                 "https://data.nber.org/gem/icd10cmtoicd9gem.csv",
-                "-P", dest,
+                "-P",
+                dest,
             ]
         )

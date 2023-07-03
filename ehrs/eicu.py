@@ -138,7 +138,16 @@ class eICU(EHR):
                 },
             ]
 
-        if self.creatinine or self.bilirubin or self.platelets or self.wbc or self.hb or self.bicarbonate or self.sodium or self.antibiotics:
+        if (
+            self.creatinine
+            or self.bilirubin
+            or self.platelets
+            or self.wbc
+            or self.hb
+            or self.bicarbonate
+            or self.sodium
+            or self.antibiotics
+        ):
             self.task_itemids = {
                 "creatinine": {
                     "fname": "lab" + self.ext,
@@ -280,34 +289,34 @@ class eICU(EHR):
                     ],
                     "code": ["drugname"],
                     "itemid": [
-                        'ancef',
-                        'azithromycin',
-                        'bacitracin',
-                        'cefazolin',
-                        'cefepime',
-                        'ceftriaxone',
-                        'cipro',
-                        'ciprofloxacin',
-                        'clindamycin',
-                        'flagyl',
-                        'levaquin',
-                        'levofloxacin',
-                        'maxipime',
-                        'meropenem',
-                        'merrem',
-                        'metronidazole',
-                        'mupirocin',
-                        'nafcillin',
-                        'nystatin',
-                        'ofloxacin',
-                        'piperacillin',
-                        'piperacillin-tazobactam',
-                        'rocephin',
-                        'tazobactam',
-                        'vancocin',
-                        'vancomycin',
-                        'zosyn',
-                        ]
+                        "ancef",
+                        "azithromycin",
+                        "bacitracin",
+                        "cefazolin",
+                        "cefepime",
+                        "ceftriaxone",
+                        "cipro",
+                        "ciprofloxacin",
+                        "clindamycin",
+                        "flagyl",
+                        "levaquin",
+                        "levofloxacin",
+                        "maxipime",
+                        "meropenem",
+                        "merrem",
+                        "metronidazole",
+                        "mupirocin",
+                        "nafcillin",
+                        "nystatin",
+                        "ofloxacin",
+                        "piperacillin",
+                        "piperacillin-tazobactam",
+                        "rocephin",
+                        "tazobactam",
+                        "vancocin",
+                        "vancomycin",
+                        "zosyn",
+                    ],
                 },
             }
 
@@ -375,7 +384,16 @@ class eICU(EHR):
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        if self.bilirubin or self.platelets or self.creatinine or self.wbc or self.hb or self.bicarbonate or self.sodium or self.antibiotics:
+        if (
+            self.bilirubin
+            or self.platelets
+            or self.creatinine
+            or self.wbc
+            or self.hb
+            or self.bicarbonate
+            or self.sodium
+            or self.antibiotics
+        ):
             logger.info("Start labeling cohorts for clinical task prediction.")
 
             labeled_cohorts = spark.createDataFrame(labeled_cohorts)
@@ -405,12 +423,10 @@ class eICU(EHR):
                 labeled_cohorts = self.clinical_task(
                     labeled_cohorts, "bicarbonate", spark
                 )
-            
+
             if self.sodium:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "sodium", spark
-                )
-            
+                labeled_cohorts = self.clinical_task(labeled_cohorts, "sodium", spark)
+
             if self.antibiotics:
                 labeled_cohorts = self.clinical_task(
                     labeled_cohorts, "antibiotics", spark
@@ -571,16 +587,21 @@ class eICU(EHR):
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
-        
+
         if "value" in self.task_itemids[task].keys():
-            table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
+            table = table.filter(F.col(code).isin(itemid)).filter(
+                F.col(value).isNotNull()
+            )
         else:
             # Have to match regex
             table = (
-                        table.dropna(subset=[code])
-                        .withColumn(code, (F.regexp_extract(F.lower(code), '('+"|".join(itemid)+')', 0)))
-                        .filter(f"{code} != ''")
-                    )
+                table.dropna(subset=[code])
+                .withColumn(
+                    code,
+                    (F.regexp_extract(F.lower(code), "(" + "|".join(itemid) + ")", 0)),
+                )
+                .filter(f"{code} != ''")
+            )
 
         merge = cohorts.join(table, on=self.icustay_key, how="inner")
 
@@ -644,11 +665,11 @@ class eICU(EHR):
         if self.rolling_from_last:
             merge = merge.filter(
                 F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60
-            ).filter(F.col(timestamp)>= F.col("OUTTIME"))
+            ).filter(F.col(timestamp) >= F.col("OUTTIME"))
         elif self.first_to_last:
-            merge = merge.filter(
-                F.col(timestamp) <= F.col("OUTTIME")
-            ).filter(F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60)
+            merge = merge.filter(F.col(timestamp) <= F.col("OUTTIME")).filter(
+                F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60
+            )
         else:
             merge = merge.filter(
                 ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
@@ -658,14 +679,29 @@ class eICU(EHR):
         if "value" in self.task_itemids[task].keys():
             if self.first_to_last:
                 window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
-                value_agg = merge.withColumn("row", F.row_number().over(window)).filter(F.col("row")==1).drop("row").withColumnRenamed(value, "avg_value")
+                value_agg = (
+                    merge.withColumn("row", F.row_number().over(window))
+                    .filter(F.col("row") == 1)
+                    .drop("row")
+                    .withColumnRenamed(value, "avg_value")
+                )
             else:
-                value_agg = merge.groupBy(self.icustay_key).agg(F.mean(value).alias("avg_value")) # TODO: mean/min/max?
+                value_agg = merge.groupBy(self.icustay_key).agg(
+                    F.mean(value).alias("avg_value")
+                )  # TODO: mean/min/max?
         else:
-            value_agg = merge.groupBy(self.icustay_key).agg(F.count(code).alias("event_count"))
-            value_agg = (cohorts.select(self.icustay_key)
-                         .join(value_agg.select(self.icustay_key, "event_count"), on=self.icustay_key, how="left")
-                         .fillna(0, subset=["event_count"]))
+            value_agg = merge.groupBy(self.icustay_key).agg(
+                F.count(code).alias("event_count")
+            )
+            value_agg = (
+                cohorts.select(self.icustay_key)
+                .join(
+                    value_agg.select(self.icustay_key, "event_count"),
+                    on=self.icustay_key,
+                    how="left",
+                )
+                .fillna(0, subset=["event_count"])
+            )
         # Labeling
         if task == "bilirubin":
             value_agg = value_agg.withColumn(
@@ -714,32 +750,37 @@ class eICU(EHR):
                 .when((value_agg.avg_value > 12), 2),
             )
 
-        elif task == 'hb':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 8, 0).when(
-                    (value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1).when(
-                        (value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2).when(
-                            (value_agg.avg_value >= 12), 3)
-                )
-
-        elif task == 'bicarbonate':
-            value_agg = value_agg.withColumn(task,
-                F.when((value_agg.avg_value < 22), 0).when(
-                        (value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1).when(
-                            (value_agg.avg_value >= 29), 2)
+        elif task == "hb":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 8, 0)
+                .when((value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1)
+                .when((value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2)
+                .when((value_agg.avg_value >= 12), 3),
             )
 
-        elif task == 'sodium':
-            value_agg = value_agg.withColumn(task,
-                F.when(value_agg.avg_value < 135, 0).when(
-                    (value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1).when(
-                        (value_agg.avg_value >= 145), 2)
+        elif task == "bicarbonate":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when((value_agg.avg_value < 22), 0)
+                .when((value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1)
+                .when((value_agg.avg_value >= 29), 2),
             )
 
-        elif task == 'antibiotics':
-            value_agg = value_agg.withColumn(task,
+        elif task == "sodium":
+            value_agg = value_agg.withColumn(
+                task,
+                F.when(value_agg.avg_value < 135, 0)
+                .when((value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1)
+                .when((value_agg.avg_value >= 145), 2),
+            )
+
+        elif task == "antibiotics":
+            value_agg = value_agg.withColumn(
+                task,
                 F.when(value_agg.event_count < 1, 0).when(
-                    (value_agg.event_count >= 1), 1)
+                    (value_agg.event_count >= 1), 1
+                ),
             )
 
         cohorts = cohorts.join(
