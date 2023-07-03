@@ -137,27 +137,6 @@ class MIMICIV(EHR):
                     "value": ["valuenum"],
                     "itemid": [50912],
                 },
-                "bilirubin": {
-                    "fname": "hosp/labevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "labevent_id",
-                        "subject_id",
-                        "specimen_id",
-                        "storetime",
-                        "value",
-                        "valueuom",
-                        "ref_range_lower",
-                        "ref_range_upper",
-                        "flag",
-                        "priority",
-                        "comments",
-                    ],
-                    "code": ["itemid"],
-                    "value": ["valuenum"],
-                    "itemid": [50885],
-                },
                 "platelets": {
                     "fname": "hosp/labevents" + self.ext,
                     "timestamp": "charttime",
@@ -307,187 +286,6 @@ class MIMICIV(EHR):
                     "value": ["valuenum"],
                     "itemid": [50983],
                 },
-                "antibiotics": {
-                    "fname": "hosp/prescriptions" + self.ext,
-                    "timestamp": "starttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "subject_id",
-                        "pharmacy_id",
-                        "poe_id",
-                        "poe_seq",
-                        "stoptime",
-                        "drug_type",
-                        "formulary_drug_cd",
-                        "gsn",
-                        "ndc",
-                        "prod_strength",
-                        "form_rx",
-                        "dose_val_rx",
-                        "dose_unit_rx",
-                        "form_val_disp",
-                        "form_unit_disp",
-                        "doses_per_24_hrs",
-                        "route",
-                    ],
-                    "code": ["drug"],
-                    "itemid": [
-                        "adoxa",
-                        "ala-tet",
-                        "alodox",
-                        "amikacin",
-                        "amikin",
-                        "amoxicill",
-                        "amphotericin",
-                        "anidulafungin",
-                        "ancef",
-                        "clavulanate",
-                        "ampicillin",
-                        "augmentin",
-                        "avelox",
-                        "avidoxy",
-                        "azactam",
-                        "azithromycin",
-                        "aztreonam",
-                        "axetil",
-                        "bactocill",
-                        "bactrim",
-                        "bactroban",
-                        "bethkis",
-                        "biaxin",
-                        "bicillin l-a",
-                        "cayston",
-                        "cefazolin",
-                        "cedax",
-                        "cefoxitin",
-                        "ceftazidime",
-                        "cefaclor",
-                        "cefadroxil",
-                        "cefdinir",
-                        "cefditoren",
-                        "cefepime",
-                        "cefotan",
-                        "cefotetan",
-                        "cefotaxime",
-                        "ceftaroline",
-                        "cefpodoxime",
-                        "cefpirome",
-                        "cefprozil",
-                        "ceftibuten",
-                        "ceftin",
-                        "ceftriaxone",
-                        "cefuroxime",
-                        "cephalexin",
-                        "cephalothin",
-                        "cephapririn",
-                        "chloramphenicol",
-                        "cipro",
-                        "ciprofloxacin",
-                        "claforan",
-                        "clarithromycin",
-                        "cleocin",
-                        "clindamycin",
-                        "cubicin",
-                        "dicloxacillin",
-                        "dirithromycin",
-                        "doryx",
-                        "doxycy",
-                        "duricef",
-                        "dynacin",
-                        "ery-tab",
-                        "eryped",
-                        "eryc",
-                        "erythrocin",
-                        "erythromycin",
-                        "factive",
-                        "flagyl",
-                        "fortaz",
-                        "furadantin",
-                        "garamycin",
-                        "gentamicin",
-                        "kanamycin",
-                        "keflex",
-                        "kefzol",
-                        "ketek",
-                        "levaquin",
-                        "levofloxacin",
-                        "lincocin",
-                        "linezolid",
-                        "macrobid",
-                        "macrodantin",
-                        "maxipime",
-                        "mefoxin",
-                        "metronidazole",
-                        "meropenem",
-                        "methicillin",
-                        "minocin",
-                        "minocycline",
-                        "monodox",
-                        "monurol",
-                        "morgidox",
-                        "moxatag",
-                        "moxifloxacin",
-                        "mupirocin",
-                        "myrac",
-                        "nafcillin",
-                        "neomycin",
-                        "nicazel doxy 30",
-                        "nitrofurantoin",
-                        "norfloxacin",
-                        "noroxin",
-                        "ocudox",
-                        "ofloxacin",
-                        "omnicef",
-                        "oracea",
-                        "oraxyl",
-                        "oxacillin",
-                        "pc pen vk",
-                        "pce dispertab",
-                        "panixine",
-                        "pediazole",
-                        "penicillin",
-                        "periostat",
-                        "pfizerpen",
-                        "piperacillin",
-                        "tazobactam",
-                        "primsol",
-                        "proquin",
-                        "raniclor",
-                        "rifadin",
-                        "rifampin",
-                        "rocephin",
-                        "smz-tmp",
-                        "septra",
-                        "septra ds",
-                        "septra",
-                        "solodyn",
-                        "spectracef",
-                        "streptomycin",
-                        "sulfadiazine",
-                        "sulfamethoxazole",
-                        "trimethoprim",
-                        "sulfatrim",
-                        "sulfisoxazole",
-                        "suprax",
-                        "synercid",
-                        "tazicef",
-                        "tetracycline",
-                        "timentin",
-                        "tobramycin",
-                        "trimethoprim",
-                        "unasyn",
-                        "vancocin",
-                        "vancomycin",
-                        "vantin",
-                        "vibativ",
-                        "vibra-tabs",
-                        "vibramycin",
-                        "zinacef",
-                        "zithromax",
-                        "zosyn",
-                        "zyvox",
-                    ],
-                },
             }
 
         if cfg.use_more_tables:
@@ -552,23 +350,6 @@ class MIMICIV(EHR):
                 },
             ]
 
-        self.disch_map_dict = {
-            "ACUTE HOSPITAL": "Other",
-            "AGAINST ADVICE": "Other",
-            "ASSISTED LIVING": "Other",
-            "CHRONIC/LONG TERM ACUTE CARE": "Other",
-            "HEALTHCARE FACILITY": "Other",
-            "HOME": "Home",
-            "HOME HEALTH CARE": "Home",
-            "HOSPICE": "Other",
-            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
-            "OTHER FACILITY": "Other",
-            "PSYCH FACILITY": "Other",
-            "REHAB": "Rehabilitation",
-            "SKILLED NURSING FACILITY": "Skilled Nursing Facility",
-            "Death": "Death",
-        }
-
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
@@ -629,63 +410,27 @@ class MIMICIV(EHR):
 
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        if (
-            self.bilirubin
-            or self.platelets
-            or self.creatinine
-            or self.wbc
-            or self.hb
-            or self.bicarbonate
-            or self.sodium
-            or self.antibiotics
-        ):
-            logger.info("Start labeling cohorts for clinical task prediction.")
-
-            labeled_cohorts = spark.createDataFrame(labeled_cohorts)
-
-            if self.bilirubin:
+        logger.info("Start labeling cohorts for clinical task prediction.")
+        labeled_cohorts = spark.createDataFrame(labeled_cohorts)
+        for clinical_task in [
+            "creatinine",
+            "platelets",
+            "wbc",
+            "hb",
+            "bicarbonate",
+            "sodium",
+        ]:
+            horizons = self.__getattribute__(clinical_task)
+            if horizons:
                 labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "bilirubin", spark
+                    labeled_cohorts,
+                    clinical_task,
+                    horizons,
+                    spark,
                 )
 
-            if self.platelets:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "platelets", spark
-                )
-
-            if self.creatinine:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "creatinine", spark
-                )
-
-            if self.wbc:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
-
-            if self.hb:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "hb", spark)
-
-            if self.bicarbonate:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "bicarbonate", spark
-                )
-
-            if self.sodium:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "sodium", spark)
-
-            if self.antibiotics:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "antibiotics", spark
-                )
-
-            # labeled_cohorts = labeled_cohorts.toPandas()
-
-            # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
-
-            logger.info("Done preparing clinical task prediction for the given cohorts")
-
-        if not isinstance(labeled_cohorts, pd.DataFrame):
-            labeled_cohorts = labeled_cohorts.toPandas()
-
+        logger.info("Done preparing clinical task prediction for the given cohorts")
+        labeled_cohorts = labeled_cohorts.toPandas()
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
         return labeled_cohorts
 
@@ -698,11 +443,12 @@ class MIMICIV(EHR):
             columns={
                 "los": "LOS",
                 "intime": "INTIME",
-                "outtime": "OUTTIME",
             }
         )
         admissions = admissions.rename(
             columns={
+                "deathtime": "DEATHTIME",
+                "admittime": "ADMITTIME",
                 "dischtime": "DISCHTIME",
             }
         )
@@ -711,9 +457,7 @@ class MIMICIV(EHR):
         icustays.loc[:, "INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True
         )
-        icustays.loc[:, "OUTTIME"] = pd.to_datetime(
-            icustays["OUTTIME"], infer_datetime_format=True
-        )
+
 
         icustays = icustays.merge(patients, on="subject_id", how="left")
         icustays["AGE"] = (
@@ -723,33 +467,32 @@ class MIMICIV(EHR):
         )
 
         icustays = icustays.merge(
-            admissions[[self.hadm_key, "discharge_location", "deathtime", "DISCHTIME"]],
+            admissions[
+                [
+                    self.hadm_key,
+                    "DEATHTIME",
+                    "DISCHTIME",
+                    "ADMITTIME",
+                ]
+            ],
             how="left",
             on=self.hadm_key,
         )
 
-        icustays["discharge_location"].replace("DIED", "Death", inplace=True)
-        icustays["DISCHTIME"] = pd.to_datetime(
-            icustays["DISCHTIME"], infer_datetime_format=True
+        icustays["ADMITTIME"] = pd.to_datetime(
+            icustays["ADMITTIME"], infer_datetime_format=True
         )
-
-        icustays["IN_ICU_MORTALITY"] = (
-            (icustays["INTIME"] < icustays["DISCHTIME"])
-            & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
-            & (icustays["discharge_location"] == "Death")
-        )
-        icustays["discharge_location"] = icustays["discharge_location"].map(
-            self.disch_map_dict
-        )
-        icustays.rename(
-            columns={"discharge_location": "HOS_DISCHARGE_LOCATION"}, inplace=True
-        )
-
         icustays["DISCHTIME"] = (
-            icustays["DISCHTIME"] - icustays["INTIME"]
+            pd.to_datetime(icustays["DISCHTIME"], infer_datetime_format=True)
+            - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
-        icustays["OUTTIME"] = (
-            icustays["OUTTIME"] - icustays["INTIME"]
+        icustays["INTIME"] = (
+            pd.to_datetime(icustays["INTIME"], infer_datetime_format=True)
+            - icustays["ADMITTIME"]
+        ).dt.total_seconds() // 60
+        icustays["DEATHTIME"] = (
+            pd.to_datetime(icustays["DEATHTIME"], infer_datetime_format=True)
+            - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
 
         return icustays
@@ -792,10 +535,9 @@ class MIMICIV(EHR):
         )
         return dx
 
-    def clinical_task(self, cohorts, task, spark):
+    def clinical_task(self, cohorts, task, horizons, spark):
         fname = self.task_itemids[task]["fname"]
         timestamp = self.task_itemids[task]["timestamp"]
-        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
         excludes = self.task_itemids[task]["exclude"]
         code = self.task_itemids[task]["code"][0]
         if "value" in self.task_itemids[task].keys():
@@ -882,126 +624,88 @@ class MIMICIV(EHR):
         merge = merge.withColumn(
             timestamp,
             F.round(
-                (F.col(timestamp).cast("long") - F.col("INTIME").cast("long")) / 60
+                (F.col(timestamp).cast("long") - F.col("ADMITTIME").cast("long")) / 60
             ),
         )
 
-        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size / outtime)
-        if self.rolling_from_last:
-            merge = merge.filter(
-                F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60
-            ).filter(F.col(timestamp) >= F.col("OUTTIME"))
-        elif self.first_to_last:
-            merge = merge.filter(F.col(timestamp) <= F.col("OUTTIME")).filter(
-                F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60
-            )
-        else:
-            merge = merge.filter(
-                ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
-            ).filter(((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
+        merge = merge.filter(F.col(timestamp) >= F.col("INTIME") + self.obs_size * 60)
+        window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
 
-        # Average value of events
-        if "value" in self.task_itemids[task].keys():
-            if self.first_to_last:
-                window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
-                value_agg = (
-                    merge.withColumn("row", F.row_number().over(window))
-                    .filter(F.col("row") == 1)
-                    .drop("row")
-                    .withColumnRenamed(value, "avg_value")
+        for horizon in horizons:
+            horizon_merge = merge.filter(
+                F.col(timestamp) < F.col("INTIME") + (self.obs_size + horizon * 24) * 60
+            ).filter(
+                F.col(timestamp)
+                >= F.col("INTIME") + (self.obs_size + (horizon - 1) * 24) * 60
+            )
+            horizon_agg = (
+                horizon_merge.withColumn("row", F.row_number().over(window))
+                .filter(F.col("row") == 1)
+                .drop("row")
+                .withColumnRenamed(value, "value")
+            )
+
+            task_name = task + "_" + str(horizon)
+            # Labeling
+            if task == "platelets":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value >= 150, 0)
+                    .when((horizon_agg.value >= 100) & (horizon_agg.value < 150), 1)
+                    .when((horizon_agg.value >= 50) & (horizon_agg.value < 100), 2)
+                    .when((horizon_agg.value >= 20) & (horizon_agg.value < 50), 3)
+                    .when(horizon_agg.value < 20, 4),
                 )
-            else:
-                value_agg = merge.groupBy(self.icustay_key).agg(
-                    F.mean(value).alias("avg_value")
-                )  # TODO: mean/min/max?
-        else:
-            value_agg = merge.groupBy(self.icustay_key).agg(
-                F.count(code).alias("event_count")
-            )
-            value_agg = (
-                cohorts.select(self.icustay_key)
-                .join(
-                    value_agg.select(self.icustay_key, "event_count"),
-                    on=self.icustay_key,
-                    how="left",
+
+            elif task == "creatinine":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 1.2, 0)
+                    .when((horizon_agg.value >= 1.2) & (horizon_agg.value < 2.0), 1)
+                    .when((horizon_agg.value >= 2.0) & (horizon_agg.value < 3.5), 2)
+                    .when((horizon_agg.value >= 3.5) & (horizon_agg.value < 5), 3)
+                    .when(horizon_agg.value >= 5, 4),
                 )
-                .fillna(0, subset=["event_count"])
-            )
-        # Labeling
-        if task == "bilirubin":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 1.2, 0)
-                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
-                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2)
-                .when((value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3)
-                .when(value_agg.avg_value >= 12.0, 4),
-            )
-        elif task == "platelets":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value >= 150, 0)
-                .when((value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1)
-                .when((value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2)
-                .when((value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3)
-                .when(value_agg.avg_value < 20, 4),
-            )
 
-        elif task == "creatinine":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 1.2, 0)
-                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
-                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2)
-                .when((value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3)
-                .when(value_agg.avg_value >= 5, 4),
-            )
+            elif task == "wbc":
+                # NOTE: unit is mg/L
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 4, 0)
+                    .when((horizon_agg.value >= 4) & (horizon_agg.value <= 12), 1)
+                    .when((horizon_agg.value > 12), 2),
+                )
 
-        elif task == "wbc":
-            # NOTE: unit is mg/L
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 4, 0)
-                .when((value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1)
-                .when((value_agg.avg_value > 12), 2),
-            )
+            elif task == "hb":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 8, 0)
+                    .when((horizon_agg.value >= 8) & (horizon_agg.value < 10), 1)
+                    .when((horizon_agg.value >= 10) & (horizon_agg.value < 12), 2)
+                    .when((horizon_agg.value >= 12), 3),
+                )
 
-        elif task == "hb":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 8, 0)
-                .when((value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1)
-                .when((value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2)
-                .when((value_agg.avg_value >= 12), 3),
-            )
+            elif task == "bicarbonate":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when((horizon_agg.value < 22), 0)
+                    .when((horizon_agg.value >= 22) & (horizon_agg.value < 29), 1)
+                    .when((horizon_agg.value >= 29), 2),
+                )
 
-        elif task == "bicarbonate":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when((value_agg.avg_value < 22), 0)
-                .when((value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1)
-                .when((value_agg.avg_value >= 29), 2),
-            )
+            elif task == "sodium":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 135, 0)
+                    .when((horizon_agg.value >= 135) & (horizon_agg.value < 145), 1)
+                    .when((horizon_agg.value >= 145), 2),
+                )
 
-        elif task == "sodium":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 135, 0)
-                .when((value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1)
-                .when((value_agg.avg_value >= 145), 2),
+            cohorts = cohorts.join(
+                horizon_agg.select(self.icustay_key, task_name),
+                on=self.icustay_key,
+                how="left",
             )
-
-        elif task == "antibiotics":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.event_count < 1, 0).when(
-                    (value_agg.event_count >= 1), 1
-                ),
-            )
-
-        cohorts = cohorts.join(
-            value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left"
-        )
 
         return cohorts
 

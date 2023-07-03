@@ -17,14 +17,6 @@ logger = logging.getLogger(__name__)
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    # task
-    parser.add_argument(
-        "--task",
-        type=str,
-        default=None,
-        help="specific task from the whole pipeline."
-        "if not set, run the whole steps.",
-    )
     parser.add_argument(
         "--dest", default="outputs", type=str, metavar="DIR", help="output directory"
     )
@@ -102,59 +94,24 @@ def get_parser():
     parser.add_argument(
         "--obs_size", type=int, default=12, help="observation window size by the hour"
     )
-    parser.add_argument(
-        "--gap_size", type=int, default=0, help="time gap window size by the hour"
-    )
-    parser.add_argument(
-        "--pred_size", type=int, default=24, help="prediction window size by the hour"
-    )
-    parser.add_argument(
-        "--long_term_pred_size",
-        type=int,
-        default=336,
-        help="prediction window size by the hour (for long term mortality task)",
-    )
-    parser.add_argument(
-        "--first_icu",
-        action="store_true",
-        help="whether to use only the first icu or not",
-    )
 
     # tasks
     parser.add_argument(
         "--mortality",
-        action="store_true",
-        help="whether to include mortality task or not",
+        nargs="+",
+        default=[1, 2, 3, 7, 14],
+        help="whether to include n-day mortality tasks or not",
     )
     parser.add_argument(
-        "--long_term_mortality",
-        action="store_true",
-        help="whether to include long term mortality task or not",
-    )
-    parser.add_argument(
-        "--los_3day",
-        action="store_true",
-        help="whether to include 3-day los task or not",
-    )
-    parser.add_argument(
-        "--los_7day",
-        action="store_true",
-        help="whether to include 7-day los task or not",
+        "--los",
+        nargs="+",
+        default=[7, 14],
+        help="whether to include n-day los tasks or not",
     )
     parser.add_argument(
         "--readmission",
         action="store_true",
         help="whether to include readmission task or not",
-    )
-    parser.add_argument(
-        "--final_acuity",
-        action="store_true",
-        help="whether to include final acuity task or not",
-    )
-    parser.add_argument(
-        "--imminent_discharge",
-        action="store_true",
-        help="whether to include imminent discharge task or not",
     )
     parser.add_argument(
         "--diagnosis",
@@ -163,49 +120,39 @@ def get_parser():
     )
     parser.add_argument(
         "--creatinine",
-        action="store_true",
-        help="whether to include creatinine task or not",
-    )
-    parser.add_argument(
-        "--bilirubin",
-        action="store_true",
-        help="whether to include bilirubin task or not",
+        nargs="+",
+        default=[1, 2, 3],
+        help="whether to include n-day creatinine tasks or not",
     )
     parser.add_argument(
         "--platelets",
-        action="store_true",
-        help="whether to include platelets task or not",
+        nargs="+",
+        default=[1, 2, 3],
+        help="whether to include n-day platelets tasks or not",
     )
     parser.add_argument(
         "--wbc",
-        action="store_true",
-        help="whether to include blood white blood cell count task or not",
+        nargs="+",
+        default=[1, 2, 3],
+        help="whether to include n-day wbc tasks or not",
     )
     parser.add_argument(
-        "--hb", action="store_true", help="whether to include hemoglobin task or not"
+        "--hb",
+        nargs="+",
+        default=[1, 2, 3],
+        help="whether to include n-day hb tasks or not",
     )
     parser.add_argument(
         "--bicarbonate",
-        action="store_true",
-        help="whether to include biocarbonate task or not",
+        nargs="+",
+        default=[1, 2, 3],
+        help="whether to include n-day bicarbonate tasks or not",
     )
     parser.add_argument(
-        "--sodium", action="store_true", help="whether to include sodium task or not"
-    )
-    parser.add_argument(
-        "--antibiotics",
-        action="store_true",
-        help="whether to include antibiotics task or not",
-    )
-
-    parser.add_argument(
-        "--chunk_size",
-        type=int,
-        default=1024,
-        help="chunk size to read large csv files",
-    )
-    parser.add_argument(
-        "--bins", type=int, default=20, help="num buckets to bin time intervals by"
+        "--sodium",
+        nargs="+",
+        default=[1, 2, 3],
+        help="whether to include n-day sodium tasks or not",
     )
 
     parser.add_argument(
@@ -223,24 +170,6 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--rolling_from_last",
-        action="store_true",
-        help="whether to start from the last event or not. If true, then observe last (obs_size, obs_size*2, ...) hours before (time_gap) from discharge",
-    )
-
-    parser.add_argument(
-        "--first_to_last",
-        action="store_true",
-        help="input with first n hour, then pred last n hours (no gap)",
-    )
-
-    parser.add_argument(
-        "--data_sampling",
-        action="store_true",
-        help="whether to perform data sampling or not",
-    )
-
-    parser.add_argument(
         "--use_more_tables",
         action="store_true",
         help="Use more tables including chartevents, Not supported on MIMIC-III",
@@ -250,21 +179,10 @@ def get_parser():
         "--num_threads", type=int, default=8, help="number of threads to use"
     )
 
-    parser.add_argument(
-        "--preserve_nan",
-        action="store_true",
-    )
-
-    parser.add_argument(
-        "--skip_value",
-        action="store_true",
-    )
     return parser
 
 
 def main(args):
-    task = args.task
-
     if not os.path.exists(args.dest):
         os.makedirs(args.dest)
 

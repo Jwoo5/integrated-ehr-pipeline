@@ -62,38 +62,23 @@ class EHR(object):
         assert self.min_age <= self.max_age, (self.min_age, self.max_age)
 
         self.obs_size = cfg.obs_size
-        self.gap_size = cfg.gap_size
-        self.pred_size = cfg.pred_size
-        self.long_term_pred_size = cfg.long_term_pred_size
-
-        self.first_icu = cfg.first_icu
 
         # tasks
         self.mortality = cfg.mortality
-        self.long_term_mortality = cfg.long_term_mortality
-        self.los_3day = cfg.los_3day
-        self.los_7day = cfg.los_7day
+        self.los = cfg.los
         self.readmission = cfg.readmission
-        self.final_acuity = cfg.final_acuity
-        self.imminent_discharge = cfg.imminent_discharge
         self.diagnosis = cfg.diagnosis
         self.creatinine = cfg.creatinine
-        self.bilirubin = cfg.bilirubin
         self.platelets = cfg.platelets
         self.wbc = cfg.wbc
         self.hb = cfg.hb
         self.bicarbonate = cfg.bicarbonate
         self.sodium = cfg.sodium
-        self.antibiotics = cfg.antibiotics
-
-        self.chunk_size = cfg.chunk_size
 
         self.dest = cfg.dest
         self.valid_percent = cfg.valid_percent
         self.seed = [int(s) for s in cfg.seed.replace(" ", "").split(",")]
         assert 0 <= cfg.valid_percent and cfg.valid_percent <= 0.5
-
-        self.bins = cfg.bins
 
         self.special_tokens_dict = dict()
         self.max_special_tokens = 100
@@ -120,19 +105,6 @@ class EHR(object):
 
         self._icustay_key = None
         self._hadm_key = None
-
-        self.rolling_from_last = cfg.rolling_from_last
-        self.first_to_last = cfg.first_to_last
-        self.data_sampling = cfg.data_sampling
-        assert not (cfg.use_more_tables and cfg.ehr == "mimiciii")
-        self.preserve_nan = cfg.preserve_nan
-        self.skip_value = cfg.skip_value
-        assert not (cfg.skip_value and cfg.ehr != "mimiciv")
-        if self.min_event_size != 0 and self.rolling_from_last:
-            logger.warn(
-                "--min_event_size is set to {} but --rolling_from_last is set to True. "
-                "This may cause some data to be ignored.".format(self.min_event_size)
-            )
 
     @property
     def icustay_fname(self):
@@ -187,15 +159,9 @@ class EHR(object):
         logger.info("Start building cohorts for {}".format(self.ehr_name))
 
         obs_size = self.obs_size
-        gap_size = self.gap_size
-        pred_size = self.pred_size
 
-        if self.rolling_from_last:
-            icustays = icustays[icustays["LOS"] >= (gap_size) / 24]
-        elif self.first_to_last:
-            icustays = icustays[icustays["LOS"] >= (obs_size + pred_size) / 24]
-        else:
-            icustays = icustays[icustays["LOS"] >= (obs_size + gap_size) / 24]
+        icustays = icustays[icustays["LOS"] >= obs_size / 24]
+
         icustays = icustays[
             (self.min_age <= icustays["AGE"]) & (icustays["AGE"] <= self.max_age)
         ]
@@ -211,10 +177,6 @@ class EHR(object):
                 icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
                 "readmission",
             ] = 0
-        if self.first_icu:
-            icustays = icustays.loc[
-                icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmin()
-            ]
 
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(
@@ -241,178 +203,26 @@ class EHR(object):
                 self.hadm_key,
                 self.icustay_key,
                 self.patient_key,
-                "readmission",
                 "INTIME",
-                "OUTTIME",
+                "ADMITTIME",
                 "DISCHTIME",
-                "IN_ICU_MORTALITY",
-                "HOS_DISCHARGE_LOCATION",
+                "DEATHTIME",
                 "LOS",
+                "readmission",
             ]
         ].copy()
 
         # los prediction
-        if not (self.rolling_from_last):
-            labeled_cohorts["los_3day"] = (cohorts["LOS"] > 3).astype(int)
-            labeled_cohorts["los_7day"] = (cohorts["LOS"] > 7).astype(int)
-
-        # mortality prediction
-        # if the discharge location of an icustay is 'Death'
-        #   & intime + obs_size + gap_size <= dischtime <= intime + obs_size + pred_size
-        # it is assigned positive label on the mortality prediction
+        if self.los:
+            for i in self.los:
+                labeled_cohorts["los_{}".format(i)] = (cohorts["LOS"] > i).astype(int)
 
         if self.mortality:
-            if self.rolling_from_last:
-                labeled_cohorts["mortality"] = (
-                    (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
-                    | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                ) & (
-                    labeled_cohorts["DISCHTIME"]
-                    <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
-                )
-            elif self.first_to_last:
-                # 그냥 mortality: in-icu mortality만
-                labeled_cohorts["mortality"] = labeled_cohorts["IN_ICU_MORTALITY"] == 1
-            else:
-                labeled_cohorts["mortality"] = (
-                    (
-                        (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
-                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                    )
-                    & (
-                        self.obs_size * 60 + self.gap_size * 60
-                        < labeled_cohorts["DISCHTIME"]
-                    )
-                    & (
-                        labeled_cohorts["DISCHTIME"]
-                        <= self.obs_size * 60 + self.pred_size * 60
-                    )
+            for i in self.mortality:
+                labeled_cohorts["mortality_{}".format(i)] = (
+                    cohorts["DEATHTIME"] - cohorts["INTIME"]
+                    < self.obs_size * 60 + i * 60 * 24
                 ).astype(int)
-
-        if self.long_term_mortality:
-            if self.rolling_from_last:
-                labeled_cohorts["long_term_mortality"] = (
-                    (
-                        (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
-                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                    )
-                    & (
-                        labeled_cohorts["DISCHTIME"]
-                        <= labeled_cohorts["OUTTIME"] + self.long_term_pred_size * 60
-                    )
-                ).astype(int)
-            else:
-                labeled_cohorts["long_term_mortality"] = (
-                    (
-                        (labeled_cohorts["IN_ICU_MORTALITY"] == "Death")
-                        | (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-                    )
-                    & (
-                        self.obs_size * 60 + self.gap_size * 60
-                        < labeled_cohorts["DISCHTIME"]
-                    )
-                    & (
-                        labeled_cohorts["DISCHTIME"]
-                        <= self.obs_size * 60 + self.long_term_pred_size * 60
-                    )
-                ).astype(int)
-
-        if self.los_3day:
-            labeled_cohorts["los_3day"] = (labeled_cohorts["LOS"] > 3).astype(int)
-        if self.los_7day:
-            labeled_cohorts["los_7day"] = (labeled_cohorts["LOS"] > 7).astype(int)
-
-        if self.final_acuity or self.imminent_discharge:
-            assert not self.first_to_last
-            # if the discharge of 'Death' occurs in icu or hospital
-            # we retain these cases for the imminent discharge task
-            labeled_cohorts["IN_HOSPITAL_MORTALITY"] = (
-                (~labeled_cohorts["IN_ICU_MORTALITY"])
-                & (labeled_cohorts["HOS_DISCHARGE_LOCATION"] == "Death")
-            ).astype(int)
-
-            if self.final_acuity:
-                # define final acuity prediction task
-                labeled_cohorts["final_acuity"] = labeled_cohorts[
-                    "HOS_DISCHARGE_LOCATION"
-                ]
-                labeled_cohorts.loc[
-                    labeled_cohorts["IN_ICU_MORTALITY"] == 1, "final_acuity"
-                ] = "IN_ICU_MORTALITY"
-                labeled_cohorts.loc[
-                    labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1, "final_acuity"
-                ] = "IN_HOSPITAL_MORTALITY"
-                # NOTE we drop null value samples #TODO
-
-                with open(
-                    os.path.join(
-                        self.dest, self.ehr_name + "_final_acuity_classes.tsv"
-                    ),
-                    "w",
-                ) as f:
-                    for i, cat in enumerate(
-                        labeled_cohorts["final_acuity"]
-                        .astype("category")
-                        .cat.categories
-                    ):
-                        print("{}\t{}".format(i, cat), file=f)
-                labeled_cohorts["final_acuity"] = (
-                    labeled_cohorts["final_acuity"].astype("category").cat.codes
-                )
-
-            if self.imminent_discharge:
-                # define imminent discharge prediction task
-                if self.rolling_from_last:
-                    is_discharged = (
-                        labeled_cohorts["DISCHTIME"]
-                        <= labeled_cohorts["OUTTIME"] + self.pred_size * 60
-                    )
-                else:
-                    is_discharged = (
-                        self.obs_size * 60 + self.gap_size * 60
-                        <= labeled_cohorts["DISCHTIME"]
-                    ) & (
-                        labeled_cohorts["DISCHTIME"]
-                        <= self.obs_size * 60 + self.pred_size * 60
-                    )
-                labeled_cohorts.loc[
-                    is_discharged, "imminent_discharge"
-                ] = labeled_cohorts.loc[is_discharged, "HOS_DISCHARGE_LOCATION"]
-                labeled_cohorts.loc[
-                    is_discharged
-                    & (
-                        (labeled_cohorts["IN_ICU_MORTALITY"] == 1)
-                        | (labeled_cohorts["IN_HOSPITAL_MORTALITY"] == 1)
-                    ),
-                    "imminent_discharge",
-                ] = "Death"
-                labeled_cohorts.loc[
-                    ~is_discharged, "imminent_discharge"
-                ] = "No Discharge"
-                # NOTE we drop null value samples #TODO
-
-                with open(
-                    os.path.join(
-                        self.dest, self.ehr_name + "_imminent_discharge_classes.tsv"
-                    ),
-                    "w",
-                ) as f:
-                    for i, cat in enumerate(
-                        labeled_cohorts["imminent_discharge"]
-                        .astype("category")
-                        .cat.categories
-                    ):
-                        print("{}\t{}".format(i, cat), file=f)
-                labeled_cohorts["imminent_discharge"] = (
-                    labeled_cohorts["imminent_discharge"].astype("category").cat.codes
-                )
-
-            labeled_cohorts = labeled_cohorts.drop(columns=["IN_HOSPITAL_MORTALITY"])
-
-        # clean up unnecessary columns
-        labeled_cohorts = labeled_cohorts.drop(
-            columns=["IN_ICU_MORTALITY", "DISCHTIME", "HOS_DISCHARGE_LOCATION"]
-        )
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
@@ -439,7 +249,6 @@ class EHR(object):
             timestamp_key = table["timestamp"]
             excludes = table["exclude"]
             obs_size = self.obs_size
-            gap_size = self.gap_size
             logger.info("{} in progress.".format(fname))
 
             code_to_descriptions = None
@@ -455,11 +264,8 @@ class EHR(object):
                     )
                 }
 
-            infer_icustay_from_hadm_key = False
-
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
             if self.icustay_key not in events.columns:
-                infer_icustay_from_hadm_key = True
                 if self.hadm_key not in events.columns:
                     raise AssertionError(
                         "{} doesn't have one of these columns: {}".format(
@@ -471,56 +277,28 @@ class EHR(object):
             if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
 
-            if infer_icustay_from_hadm_key:
-                events = events.join(
-                    cohorts.select(
-                        self.hadm_key, self.icustay_key, "INTIME", "OUTTIME"
-                    ),
-                    on=self.hadm_key,
-                    how="inner",
-                )
-                if table["timeoffsetunit"] == "abs":
-                    events = (
-                        events.withColumn(
-                            "TEMP_TIME",
-                            F.round(
-                                (
-                                    F.col(timestamp_key).cast("long")
-                                    - F.col("INTIME").cast("long")
-                                )
-                                / 60
-                            ),
-                        )
-                        .filter(F.col("TEMP_TIME") >= 0)
-                        .filter(F.col("TEMP_TIME") <= F.col("OUTTIME"))
-                        .drop("TEMP_TIME")
-                    )
-                else:
-                    # All tables in eICU has icustay_key -> no need to handle
-                    raise NotImplementedError()
-                events = events.join(
-                    cohorts.select(self.icustay_key),
-                    on=self.icustay_key,
-                    how="leftsemi",
-                )
-
-            else:
-                events = events.join(
-                    cohorts.select(self.icustay_key, "INTIME", "OUTTIME"),
-                    on=self.icustay_key,
-                    how="inner",
-                )
+            if self.icustay_key in events.columns:
+                events = events.drop(self.icustay_key)
+            # Multiple Adm- > Hadm key 가 중복 여러개 O
+            events = events.join(
+                cohorts.select(self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME"),
+                on=self.hadm_key,
+                how="right",
+            )
 
             if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(
                     "TIME",
                     F.round(
                         (
-                            F.col(timestamp_key).cast("long")
-                            - F.col("INTIME").cast("long")
+                            (
+                                F.col(timestamp_key).cast("long")
+                                - F.col("ADMITTIME").cast("long")
+                            )
+                            / 60
                         )
-                        / 60
-                    ),
+                    )
+                    - F.col("INTIME"),
                 )
                 events = events.drop(timestamp_key)
             elif table["timeoffsetunit"] == "min":
@@ -528,19 +306,9 @@ class EHR(object):
             else:
                 raise NotImplementedError()
 
-            if self.rolling_from_last:
-                events = events.filter(F.col("TIME") >= 0).filter(
-                    F.col("TIME") < F.col("OUTTIME") - gap_size * 60
-                )
-                events = events.withColumn(
-                    "TIME", F.col("TIME") - F.col("OUTTIME") + gap_size * 60
-                )
-            else:
-                events = events.filter(F.col("TIME") >= 0).filter(
-                    F.col("TIME") < obs_size * 60
-                )
+            events = events.filter(F.col("TIME") < obs_size * 60)
 
-            events = events.drop("INTIME", "OUTTIME", self.hadm_key)
+            events = events.drop("INTIME", "ADMITTIME", self.hadm_key)
 
             if code_to_descriptions:
                 for col in code_to_descriptions.keys():
@@ -628,17 +396,6 @@ class EHR(object):
                         if col in [self.icustay_key, "TIME"]:
                             continue
                         if val is None:
-                            if self.preserve_nan:
-                                val = "[unused1]"
-                            else:
-                                continue
-
-                        if self.skip_value and col in [
-                            "value",
-                            "dose_val_rx",
-                            "amount",
-                            "valuenum",
-                        ]:
                             continue
                         encoded_col = encoded_cols[col]
                         encoded_val = process_unit(val, self.value_type_id)
@@ -700,36 +457,12 @@ class EHR(object):
 
             flatten_lens = [0] + list(flatten_lens + 1)
 
-            if self.rolling_from_last:
-                # For icu len:
-                # Iteratively add hi_start and hi_end and time_len
-                # Note: Time is arranges as charttime - outtime + gap_size (minus offset)
-                # Remove last n hours
-                max_obs_len = int(
-                    -((df["TIME"].min() // (self.obs_size * 60)) * self.obs_size * 60)
-                )
-                hi_start = []
-                for obs_len in range(
-                    self.obs_size * 60, max_obs_len, self.obs_size * 60
-                ):
-                    hi_start.append(np.searchsorted(df["TIME"].values, -obs_len))
-                # If LOS is exactly same with (obs_size+gap_size)*60
-                if len(hi_start) == 0:
-                    hi_start = [0]
-                # To allocate list to cell
-                fl_start = [flatten_lens[i] for i in hi_start]
-            elif self.first_to_last:
-                hi_start = []
-                fl_start = []
-                for time in range(self.obs_size):
-                    event_idx = np.searchsorted(df["TIME"].values, time * 60)
-                    hi_start.append(event_idx)
-                    fl_start.append(flatten_lens[event_idx])
-            else:
-                if len(df) <= self.min_event_size:
-                    return events["TIME"].to_frame()
-                hi_start = 0
-                fl_start = 0
+            hi_start = []
+            fl_start = []
+            for time in range(self.obs_size):
+                event_idx = np.searchsorted(df["TIME"].values, time * 60)
+                hi_start.append(event_idx)
+                fl_start.append(flatten_lens[event_idx])
 
             make_hi = lambda cls_id, sep_id, iterable: [
                 [cls_id] + list(i) + [sep_id] for i in iterable
@@ -789,6 +522,10 @@ class EHR(object):
         shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
 
+        if isinstance(cohorts, pd.DataFrame):
+            cohorts = spark.createDataFrame(cohorts)
+
+        # Allow duplication
         events.groupBy(self.icustay_key).apply(_make_input).write.mode(
             "overwrite"
         ).format("noop").save()
@@ -872,7 +609,7 @@ class EHR(object):
             ][0]
             row = cohorts.loc[corresponding_idx]
             for col in cohorts.columns:
-                if col in ["INTIME", "hi_start", "fl_start", "fl_lens", "time"]:
+                if col in ["ADMITTIME", "hi_start", "fl_start", "fl_lens", "time"]:
                     continue
                 stay_g.attrs[col] = row[col]
 
@@ -932,8 +669,8 @@ class EHR(object):
     def make_compatible(self, icustays):
         """
         make different ehrs compatible with one another here
-        NOTE: outtime/dischtime is converted to relative minutes from intime
-            but, maintain the intime as the original value for later use
+        NOTE: timestamps are converted to relative minutes from admittime
+        but, maintain the admittime as the original value for later use
         """
         raise NotImplementedError()
 
@@ -945,10 +682,9 @@ class EHR(object):
             "LOS",
             "AGE",
             "INTIME",
-            "OUTTIME",
+            "ADMITTIME",
             "DISCHTIME",
-            "IN_ICU_MORTALITY",
-            "HOS_DISCHARGE_LOCATION",
+            "DEATHTIME",
         ]
         for item in checklist:
             if item not in icustays.columns.to_list():
