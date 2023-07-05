@@ -205,7 +205,6 @@ class EHR(object):
                 self.patient_key,
                 "INTIME",
                 "ADMITTIME",
-                "DISCHTIME",
                 "DEATHTIME",
                 "LOS",
                 "readmission",
@@ -276,6 +275,13 @@ class EHR(object):
             events = events.drop(*excludes)
             if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
+
+            if self.hadm_key not in events.columns:
+                events = events.join(
+                    cohorts.select(self.hadm_key, self.icustay_key),
+                    on=self.icustay_key,
+                    how="right",
+                )
 
             if self.icustay_key in events.columns:
                 events = events.drop(self.icustay_key)
@@ -683,7 +689,6 @@ class EHR(object):
             "AGE",
             "INTIME",
             "ADMITTIME",
-            "DISCHTIME",
             "DEATHTIME",
         ]
         for item in checklist:

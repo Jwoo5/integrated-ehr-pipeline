@@ -3,6 +3,7 @@ import logging
 import os
 from collections import Counter
 
+import numpy as np
 import pandas as pd
 import pyspark.sql.functions as F
 import treelib
@@ -140,13 +141,11 @@ class eICU(EHR):
 
         if (
             self.creatinine
-            or self.bilirubin
             or self.platelets
             or self.wbc
             or self.hb
             or self.bicarbonate
             or self.sodium
-            or self.antibiotics
         ):
             self.task_itemids = {
                 "creatinine": {
@@ -163,21 +162,6 @@ class eICU(EHR):
                     "code": ["labname"],
                     "value": ["labresult"],
                     "itemid": ["creatinine"],
-                },
-                "bilirubin": {
-                    "fname": "lab" + self.ext,
-                    "timestamp": "labresultoffset",
-                    "timeoffsetunit": "min",
-                    "exclude": [
-                        "labtypeid",
-                        "labresulttext",
-                        "labmeasurenamesystem",
-                        "labmeasurenameinterface",
-                        "labresultrevisedoffset",
-                    ],
-                    "code": ["labname"],
-                    "value": ["labresult"],
-                    "itemid": ["total bilirubin"],
                 },
                 "platelets": {
                     "fname": "lab" + self.ext,
@@ -269,68 +253,7 @@ class eICU(EHR):
                     "value": ["labresult"],
                     "itemid": ["sodium"],
                 },
-                "antibiotics": {
-                    "fname": "medication" + self.ext,
-                    "timestamp": "drugstartoffset",
-                    "timeoffsetunit": "min",
-                    "exclude": [
-                        "medicationid",
-                        "drugorderoffset",
-                        "drugivadmixture",
-                        "drugordercancelled",
-                        "drughiclseqno",
-                        "dosage",
-                        "routeadmin",
-                        "frequency",
-                        "loadingdose",
-                        "prn",
-                        "drugstopoffset",
-                        "gtc",
-                    ],
-                    "code": ["drugname"],
-                    "itemid": [
-                        "ancef",
-                        "azithromycin",
-                        "bacitracin",
-                        "cefazolin",
-                        "cefepime",
-                        "ceftriaxone",
-                        "cipro",
-                        "ciprofloxacin",
-                        "clindamycin",
-                        "flagyl",
-                        "levaquin",
-                        "levofloxacin",
-                        "maxipime",
-                        "meropenem",
-                        "merrem",
-                        "metronidazole",
-                        "mupirocin",
-                        "nafcillin",
-                        "nystatin",
-                        "ofloxacin",
-                        "piperacillin",
-                        "piperacillin-tazobactam",
-                        "rocephin",
-                        "tazobactam",
-                        "vancocin",
-                        "vancomycin",
-                        "zosyn",
-                    ],
-                },
             }
-
-        self.disch_map_dict = {
-            "Home": "Home",
-            "IN_ICU_MORTALITY": "IN_ICU_MORTALITY",
-            "Nursing Home": "Other",
-            "Other": "Other",
-            "Other External": "Other",
-            "Other Hospital": "Other",
-            "Rehabilitation": "Rehabilitation",
-            "Skilled Nursing Facility": "Skilled Nursing Facility",
-            "Death": "Death",
-        }
 
         self._icustay_key = "patientunitstayid"
         self._hadm_key = "patienthealthsystemstayid"
@@ -380,66 +303,32 @@ class eICU(EHR):
             )
             # NaN case in diagnosis -> []
 
-        logger.info("Done preparing diagnosis prediction for the given cohorts")
+            logger.info("Done preparing diagnosis prediction for the given cohorts")
+            self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
-
-        if (
-            self.bilirubin
-            or self.platelets
-            or self.creatinine
-            or self.wbc
-            or self.hb
-            or self.bicarbonate
-            or self.sodium
-            or self.antibiotics
-        ):
-            logger.info("Start labeling cohorts for clinical task prediction.")
-
+        logger.info("Start labeling cohorts for clinical task prediction.")
+        for clinical_task in [
+            "creatinine",
+            "platelets",
+            "wbc",
+            "hb",
+            "bicarbonate",
+            "sodium",
+        ]:
+            # Iterative join cause perf error -> reset df each time
             labeled_cohorts = spark.createDataFrame(labeled_cohorts)
-
-            if self.bilirubin:
+            horizons = self.__getattribute__(clinical_task)
+            if horizons:
                 labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "bilirubin", spark
+                    labeled_cohorts,
+                    clinical_task,
+                    horizons,
+                    spark,
                 )
-
-            if self.platelets:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "platelets", spark
-                )
-
-            if self.creatinine:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "creatinine", spark
-                )
-
-            if self.wbc:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "wbc", spark)
-
-            if self.hb:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "hb", spark)
-
-            if self.bicarbonate:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "bicarbonate", spark
-                )
-
-            if self.sodium:
-                labeled_cohorts = self.clinical_task(labeled_cohorts, "sodium", spark)
-
-            if self.antibiotics:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts, "antibiotics", spark
-                )
-
-            # self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled.clinical_tasks")
-
-            logger.info("Done preparing clinical task prediction for the given cohorts")
-
-        if not isinstance(labeled_cohorts, pd.DataFrame):
             labeled_cohorts = labeled_cohorts.toPandas()
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
+        logger.info(f"Finish Labeling for Task {clinical_task}")
         return labeled_cohorts
 
     def make_compatible(self, icustays):
@@ -448,32 +337,15 @@ class eICU(EHR):
         icustays["AGE"] = icustays["age"].replace("> 89", 300).astype(int)
 
         # hacks for compatibility with other ehrs
-        icustays["INTIME"] = 0
-        icustays.rename(columns={"unitdischargeoffset": "OUTTIME"}, inplace=True)
-        # DEATHTIME
-        # icustays["DEATHTIME"] = np.nan
-        # is_discharged_in_icu = icustays["unitdischargestatus"] == "Expired"
-        # icustays.loc[is_discharged_in_icu, "DEATHTIME"] = (
-        #     icustays.loc[is_discharged_in_icu, "OUTTIME"]
-        # )
-        # is_discharged_in_hos = (
-        #     (icustays["unitdischargestatus"] != "Expired")
-        #     & (icustays["hospitaldischargestatus"] == "Expired")
-        # )
-        # icustays.loc[is_discharged_in_hos, "DEATHTIME"] = (
-        #     icustays.loc[is_discharged_in_hos, "OUTTIME"]
-        # ) + 1
-
-        icustays.rename(columns={"hospitaldischargeoffset": "DISCHTIME"}, inplace=True)
-
-        icustays["IN_ICU_MORTALITY"] = icustays["unitdischargestatus"] == "Expired"
-        icustays["hospitaldischargelocation"] = icustays[
-            "hospitaldischargelocation"
-        ].map(self.disch_map_dict)
-        icustays.rename(
-            columns={"hospitaldischargelocation": "HOS_DISCHARGE_LOCATION"},
-            inplace=True,
+        icustays["ADMITTIME"] = 0
+        icustays["DEATHTIME"] = np.nan
+        is_dead = icustays["hospitaldischargestatus"] == "Expired"
+        icustays.loc[is_dead, "DEATHTIME"] = (
+            icustays.loc[is_dead, "hospitaldischargeoffset"]
+            - icustays.loc[is_dead, "hospitaladmitoffset"]
         )
+        icustays["INTIME"] = -icustays["hospitaladmitoffset"]
+        icustays["LOS"] = icustays["unitdischargeoffset"] / 60 / 24
 
         return icustays
 
@@ -575,35 +447,26 @@ class eICU(EHR):
 
         return str2cat
 
-    def clinical_task(self, cohorts, task, spark):
+    def clinical_task(self, cohorts, task, horizons, spark):
         fname = self.task_itemids[task]["fname"]
         timestamp = self.task_itemids[task]["timestamp"]
-        timeoffsetunit = self.task_itemids[task]["timeoffsetunit"]
         excludes = self.task_itemids[task]["exclude"]
         code = self.task_itemids[task]["code"][0]
-        if "value" in self.task_itemids[task].keys():
-            value = self.task_itemids[task]["value"][0]
+        value = self.task_itemids[task]["value"][0]
         itemid = self.task_itemids[task]["itemid"]
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
 
-        if "value" in self.task_itemids[task].keys():
-            table = table.filter(F.col(code).isin(itemid)).filter(
-                F.col(value).isNotNull()
-            )
-        else:
-            # Have to match regex
-            table = (
-                table.dropna(subset=[code])
-                .withColumn(
-                    code,
-                    (F.regexp_extract(F.lower(code), "(" + "|".join(itemid) + ")", 0)),
-                )
-                .filter(f"{code} != ''")
-            )
+        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
 
-        merge = cohorts.join(table, on=self.icustay_key, how="inner")
+        # If multiple ICU stays exist in one admission, should consider others for labeling for each
+        merge = table.join(
+            cohorts.select(self.hadm_key, self.icustay_key),
+            on=self.icustay_key,
+            how="inner",
+        ).drop(self.icustay_key)
+        merge = merge.join(cohorts, on=self.hadm_key, how="inner")
 
         if task == "creatinine":
             patient = spark.read.csv(
@@ -635,157 +498,107 @@ class eICU(EHR):
             io_dialysis = io_dialysis.join(patient, on=self.icustay_key, how="left")
 
             dialysis_multihosp = io_dialysis.join(
-                multi_hosp, on=self.patient_key, how="leftsemi"
+                F.broadcast(multi_hosp), on=self.patient_key, how="leftsemi"
             ).select(self.patient_key)
 
-            io_dialysis = io_dialysis.drop(self.patient_key)
+            io_dialysis = io_dialysis.withColumnRenamed(
+                self.task_itemids["dialysis"]["timestamp"], "_DIALYSIS_TIME"
+            ).select(self.patient_key, self.icustay_key, "_DIALYSIS_TIME")
 
-            def dialysis_time(table, timecolumn):
-                return table.withColumn("_DIALYSIS_TIME", F.col(timecolumn)).select(
-                    self.icustay_key, "_DIALYSIS_TIME"
-                )
-
-            io_dialysis = dialysis_time(
-                io_dialysis, self.task_itemids["dialysis"]["timestamp"]
-            )
             io_dialysis = io_dialysis.groupBy(self.icustay_key).agg(
-                F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME")
+                F.min("_DIALYSIS_TIME").alias("_DIALYSIS_TIME"),
+                F.first(self.patient_key).alias(self.patient_key),
             )
-            io_dialysis = io_dialysis.select([self.icustay_key, "_DIALYSIS_TIME"])
-            merge = merge.join(io_dialysis, on=self.icustay_key, how="left")
+            merge = merge.join(
+                F.broadcast(io_dialysis), on=self.icustay_key, how="left"
+            )
             merge = merge.filter(
                 F.isnull("_DIALYSIS_TIME")
                 | (F.col("_DIALYSIS_TIME") > F.col(timestamp))
             )
             merge = merge.drop("_DIALYSIS_TIME")
-
+            merge = merge.join(
+                F.broadcast(dialysis_multihosp), on=self.patient_key, how="leftanti"
+            )
         # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
 
-        # Cohort with events within (obs_size + gap_size) - (obs_size + pred_size)
-        if self.rolling_from_last:
-            merge = merge.filter(
-                F.col(timestamp) <= F.col("OUTTIME") + self.pred_size * 60
-            ).filter(F.col(timestamp) >= F.col("OUTTIME"))
-        elif self.first_to_last:
-            merge = merge.filter(F.col(timestamp) <= F.col("OUTTIME")).filter(
-                F.col(timestamp) >= F.col("OUTTIME") - self.pred_size * 60
-            )
-        else:
-            merge = merge.filter(
-                ((self.obs_size + self.gap_size) * 60) <= F.col(timestamp)
-            ).filter(((self.obs_size + self.pred_size) * 60) >= F.col(timestamp))
+        merge = merge.filter(F.col(timestamp) >= self.obs_size * 60)
+        window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
 
-        # Average value of events
-        if "value" in self.task_itemids[task].keys():
-            if self.first_to_last:
-                window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
-                value_agg = (
-                    merge.withColumn("row", F.row_number().over(window))
-                    .filter(F.col("row") == 1)
-                    .drop("row")
-                    .withColumnRenamed(value, "avg_value")
-                )
-            else:
-                value_agg = merge.groupBy(self.icustay_key).agg(
-                    F.mean(value).alias("avg_value")
-                )  # TODO: mean/min/max?
-        else:
-            value_agg = merge.groupBy(self.icustay_key).agg(
-                F.count(code).alias("event_count")
-            )
-            value_agg = (
-                cohorts.select(self.icustay_key)
-                .join(
-                    value_agg.select(self.icustay_key, "event_count"),
-                    on=self.icustay_key,
-                    how="left",
-                )
-                .fillna(0, subset=["event_count"])
-            )
-        # Labeling
-        if task == "bilirubin":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 1.2, 0)
-                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
-                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 6.0), 2)
-                .when((value_agg.avg_value >= 6.0) & (value_agg.avg_value < 12.0), 3)
-                .when(value_agg.avg_value >= 12.0, 4),
-            )
-        elif task == "platelets":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value >= 150, 0)
-                .when((value_agg.avg_value >= 100) & (value_agg.avg_value < 150), 1)
-                .when((value_agg.avg_value >= 50) & (value_agg.avg_value < 100), 2)
-                .when((value_agg.avg_value >= 20) & (value_agg.avg_value < 50), 3)
-                .when(value_agg.avg_value < 20, 4),
+        for horizon in horizons:
+            horizon_merge = merge.filter(
+                F.col(timestamp) < (self.obs_size + horizon * 24) * 60
+            ).filter(F.col(timestamp) >= (self.obs_size + (horizon - 1) * 24) * 60)
+            horizon_agg = (
+                horizon_merge.withColumn("row", F.row_number().over(window))
+                .filter(F.col("row") == 1)
+                .drop("row")
+                .withColumnRenamed(value, "value")
             )
 
-        elif task == "creatinine":
-            value_agg = value_agg.join(
-                patient.select([self.patient_key, self.icustay_key]),
+            task_name = task + "_" + str(horizon)
+            # Labeling
+            if task == "platelets":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value >= 150, 0)
+                    .when((horizon_agg.value >= 100) & (horizon_agg.value < 150), 1)
+                    .when((horizon_agg.value >= 50) & (horizon_agg.value < 100), 2)
+                    .when((horizon_agg.value >= 20) & (horizon_agg.value < 50), 3)
+                    .when(horizon_agg.value < 20, 4),
+                )
+
+            elif task == "creatinine":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 1.2, 0)
+                    .when((horizon_agg.value >= 1.2) & (horizon_agg.value < 2.0), 1)
+                    .when((horizon_agg.value >= 2.0) & (horizon_agg.value < 3.5), 2)
+                    .when((horizon_agg.value >= 3.5) & (horizon_agg.value < 5), 3)
+                    .when(horizon_agg.value >= 5, 4),
+                )
+                # In case of eICU, it is impossible to determine the order of adms
+                # Hence, if some of admission has dialisys record, drop all others
+
+            elif task == "wbc":
+                # NOTE: unit is mg/L
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 4, 0)
+                    .when((horizon_agg.value >= 4) & (horizon_agg.value <= 12), 1)
+                    .when((horizon_agg.value > 12), 2),
+                )
+
+            elif task == "hb":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 8, 0)
+                    .when((horizon_agg.value >= 8) & (horizon_agg.value < 10), 1)
+                    .when((horizon_agg.value >= 10) & (horizon_agg.value < 12), 2)
+                    .when((horizon_agg.value >= 12), 3),
+                )
+
+            elif task == "bicarbonate":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when((horizon_agg.value < 22), 0)
+                    .when((horizon_agg.value >= 22) & (horizon_agg.value < 29), 1)
+                    .when((horizon_agg.value >= 29), 2),
+                )
+
+            elif task == "sodium":
+                horizon_agg = horizon_agg.withColumn(
+                    task_name,
+                    F.when(horizon_agg.value < 135, 0)
+                    .when((horizon_agg.value >= 135) & (horizon_agg.value < 145), 1)
+                    .when((horizon_agg.value >= 145), 2),
+                )
+
+            cohorts = cohorts.join(
+                F.broadcast(horizon_agg.select(self.icustay_key, task_name)),
                 on=self.icustay_key,
                 how="left",
             )
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 1.2, 0)
-                .when((value_agg.avg_value >= 1.2) & (value_agg.avg_value < 2.0), 1)
-                .when((value_agg.avg_value >= 2.0) & (value_agg.avg_value < 3.5), 2)
-                .when((value_agg.avg_value >= 3.5) & (value_agg.avg_value < 5), 3)
-                .when(value_agg.avg_value >= 5, 4),
-            )
-            value_agg = value_agg.join(
-                dialysis_multihosp, on=self.patient_key, how="leftanti"
-            )
-
-            value_agg = value_agg.drop(self.patient_key)
-
-        elif task == "wbc":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 4, 0)
-                .when((value_agg.avg_value >= 4) & (value_agg.avg_value <= 12), 1)
-                .when((value_agg.avg_value > 12), 2),
-            )
-
-        elif task == "hb":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 8, 0)
-                .when((value_agg.avg_value >= 8) & (value_agg.avg_value < 10), 1)
-                .when((value_agg.avg_value >= 10) & (value_agg.avg_value < 12), 2)
-                .when((value_agg.avg_value >= 12), 3),
-            )
-
-        elif task == "bicarbonate":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when((value_agg.avg_value < 22), 0)
-                .when((value_agg.avg_value >= 22) & (value_agg.avg_value < 29), 1)
-                .when((value_agg.avg_value >= 29), 2),
-            )
-
-        elif task == "sodium":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.avg_value < 135, 0)
-                .when((value_agg.avg_value >= 135) & (value_agg.avg_value < 145), 1)
-                .when((value_agg.avg_value >= 145), 2),
-            )
-
-        elif task == "antibiotics":
-            value_agg = value_agg.withColumn(
-                task,
-                F.when(value_agg.event_count < 1, 0).when(
-                    (value_agg.event_count >= 1), 1
-                ),
-            )
-
-        cohorts = cohorts.join(
-            value_agg.select(self.icustay_key, task), on=self.icustay_key, how="left"
-        )
 
         return cohorts
 

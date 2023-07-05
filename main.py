@@ -1,7 +1,8 @@
+import argparse
+import logging
 import os
 import sys
-import logging
-import argparse
+
 from pyspark.sql import SparkSession
 
 from ehrs import EHR_REGISTRY

@@ -449,7 +449,6 @@ class MIMICIV(EHR):
             columns={
                 "deathtime": "DEATHTIME",
                 "admittime": "ADMITTIME",
-                "dischtime": "DISCHTIME",
             }
         )
 
@@ -457,7 +456,6 @@ class MIMICIV(EHR):
         icustays.loc[:, "INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True
         )
-
 
         icustays = icustays.merge(patients, on="subject_id", how="left")
         icustays["AGE"] = (
@@ -471,7 +469,6 @@ class MIMICIV(EHR):
                 [
                     self.hadm_key,
                     "DEATHTIME",
-                    "DISCHTIME",
                     "ADMITTIME",
                 ]
             ],
@@ -482,10 +479,6 @@ class MIMICIV(EHR):
         icustays["ADMITTIME"] = pd.to_datetime(
             icustays["ADMITTIME"], infer_datetime_format=True
         )
-        icustays["DISCHTIME"] = (
-            pd.to_datetime(icustays["DISCHTIME"], infer_datetime_format=True)
-            - icustays["ADMITTIME"]
-        ).dt.total_seconds() // 60
         icustays["INTIME"] = (
             pd.to_datetime(icustays["INTIME"], infer_datetime_format=True)
             - icustays["ADMITTIME"]
@@ -540,18 +533,12 @@ class MIMICIV(EHR):
         timestamp = self.task_itemids[task]["timestamp"]
         excludes = self.task_itemids[task]["exclude"]
         code = self.task_itemids[task]["code"][0]
-        if "value" in self.task_itemids[task].keys():
-            value = self.task_itemids[task]["value"][0]
+        value = self.task_itemids[task]["value"][0]
         itemid = self.task_itemids[task]["itemid"]
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
         table = table.drop(*excludes)
-        if "value" in self.task_itemids[task].keys():
-            table = table.filter(F.col(code).isin(itemid)).filter(
-                F.col(value).isNotNull()
-            )
-        else:
-            table = table.filter(F.lower(F.col(code)).isin(itemid))
+        table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
 
         merge = cohorts.join(table, on=self.hadm_key, how="inner")
         merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
