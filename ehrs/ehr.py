@@ -275,24 +275,16 @@ class EHR(object):
             events = events.drop(*excludes)
             if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
-
-            if self.hadm_key not in events.columns:
+                if self.icustay_key in events.columns:
+                    events = events.drop(self.icustay_key)
+                # HADM Join -> duplicated by icy ids -> can process w.  intime
                 events = events.join(
-                    cohorts.select(self.hadm_key, self.icustay_key),
-                    on=self.icustay_key,
+                    cohorts.select(
+                        self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME"
+                    ),
+                    on=self.hadm_key,
                     how="right",
                 )
-
-            if self.icustay_key in events.columns:
-                events = events.drop(self.icustay_key)
-            # Multiple Adm- > Hadm key 가 중복 여러개 O
-            events = events.join(
-                cohorts.select(self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME"),
-                on=self.hadm_key,
-                how="right",
-            )
-
-            if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(
                     "TIME",
                     F.round(
@@ -307,8 +299,33 @@ class EHR(object):
                     - F.col("INTIME"),
                 )
                 events = events.drop(timestamp_key)
+
             elif table["timeoffsetunit"] == "min":
-                events = events.withColumn("TIME", F.col(timestamp_key).cast("int"))
+                # First, make all timestamps as offset from hospital admission
+                events = events.join(
+                    cohorts.select(self.hadm_key, self.icustay_key, "INTIME"),
+                    on=self.icustay_key,
+                    how="right",
+                )
+                events = events.withColumn(
+                    "TIME", F.col(timestamp_key).cast("int") + F.col("INTIME")
+                )
+                # Second, duplicate events to handle multiple icustays
+                events = events.drop(self.icustay_key, "INTIME")
+                events = events.join(
+                    cohorts.select(self.hadm_key, self.icustay_key),
+                    on=self.hadm_key,
+                    how="right",
+                )
+                events = events.join(
+                    cohorts.select(self.icustay_key, "INTIME", "ADMITTIME"),
+                    on=self.icustay_key,
+                    how="right",
+                )
+                # Third, make all timestamps as offset from icu admission
+                events = events.withColumn("TIME", F.col("TIME") - F.col("INTIME"))
+                events = events.drop(timestamp_key)
+
             else:
                 raise NotImplementedError()
 
