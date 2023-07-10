@@ -62,14 +62,14 @@ class MIMICIII(EHR):
                 "code": ["ITEMID"],
                 "desc": ["D_LABITEMS" + self.ext],
                 "desc_key": ["LABEL"],
-                "numeric": ["VALUE", "VALUENUM"]
+                "numeric": ["VALUENUM"]
             },
             {
                 "fname": "PRESCRIPTIONS" + self.ext,
                 "timestamp": "STARTDATE",
                 "timeoffsetunit": "abs",
                 "exclude": ["ENDDATE", "GSN", "NDC", "ROW_ID", "SUBJECT_ID"],
-                "numeric": ["DOSE_VAL_RX", "FORM_VAL_DISP"]
+                "numeric": []
             },
             {
                 "fname": "INPUTEVENTS_MV" + self.ext,
@@ -110,7 +110,7 @@ class MIMICIII(EHR):
                 "code": ["ITEMID"],
                 "desc": ["D_ITEMS" + self.ext],
                 "desc_key": ["LABEL"],
-                "numeric": ["AMOUNT", "RATE", "PATIENTWEIGHT", "TOTALAMOUNT", "ORIGINALAMOUNT", "ORIGINALRATE"]
+                "numeric": ["AMOUNT", "RATE", "ORIGINALAMOUNT", "ORIGINALRATE"]
             },
         ]
 

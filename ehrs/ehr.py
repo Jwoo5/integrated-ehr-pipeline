@@ -600,8 +600,8 @@ class EHR(object):
                 pickle.dump(data, f)
             return events["TIME"].to_frame()
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
+        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
 
         events.groupBy(self.icustay_key).apply(_make_input).write.mode("overwrite").format("noop").save()
 
@@ -703,7 +703,7 @@ class EHR(object):
         with open(os.path.join(self.dest, f"{self.ehr_name}_predef_vocab.pickle"), 'wb') as handle:
             pickle.dump(predef_vocab, handle, protocol=pickle.HIGHEST_PROTOCOL)
             
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
+        # shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
         # Drop patients with few events
 
         if not isinstance(cohorts, pd.DataFrame):
