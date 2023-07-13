@@ -624,12 +624,6 @@ class EHR(object):
                 data = pickle.load(f)
 
             # Create Predef Vocab Dictionary
-            if self.ehr_name == 'mimiciii':
-                exception = ['[2860, 11848, 1306, 5167]', '[2860, 2860, 11848, 1306]', '[2860, 2860, 11848, 1306, 5167]']
-            elif self.ehr_name == 'eicu':
-                exception = ['[8074, 4894, 7067, 17380, 8074, 3263, 2225, 22920, 16470, 5821, 13894, 1306]']
-            elif self.ehr_name == 'mimiciv':
-                exception = ['[2860, 11848, 1306, 1231, 2087, 168, 2079, 168, 2211]']
             for itemid, typeid in zip(data['hi'][:, 0], data['hi'][:, 1]):
                 type_id = self.table_type_id
                 token_group = []
@@ -644,16 +638,32 @@ class EHR(object):
                         elif type_id == self.column_type_id:
                             column_name = str(token_group)
                         elif type_id == self.value_type_id:
-                            try:
-                                if column_name in exception:
-                                    if self.ehr_name == 'mimiciv':
-                                        column_name = str(self.tokenizer.encode("".join(self.tokenizer.decode(eval(column_name)).split()[1:]))[1:-1])
-                                    else:
-                                        column_name = str(self.tokenizer.encode(self.tokenizer.decode(eval(column_name)).split()[-1])[1:-1])
-                                if str(token_group) not in vocab_dict[table_name][column_name][0]:
-                                    vocab_dict[table_name][column_name][0].append(str(token_group))
-                            except:
-                                breakpoint()
+                            
+                            if column_name not in vocab_dict[table_name].keys():
+                                split = self.tokenizer.decode(eval(column_name)).split()
+                                tmp = ""
+                                cols = []
+                                for idx, elem in enumerate(split):
+                                    flag = 0
+                                    if idx < len(split)-1:
+                                        if split[idx+1] == "_" or elem == "_":
+                                            if split[idx+1] == "_":
+                                                tmp = tmp + elem
+                                                flag = 1
+                                            if elem == "_":
+                                                tmp = tmp + " " + elem + " "
+                                                flag = 1
+                                    if flag == 0:
+                                        if len(tmp) == 0:
+                                            cols.append(elem)
+                                        if len(tmp) > 0:
+                                            tmp = tmp + elem
+                                            cols.append(tmp)
+                                            tmp = ""
+                                column_name = str(self.tokenizer.encode(cols[-1])[1:-1])
+                            if str(token_group) not in vocab_dict[table_name][column_name][0]:
+                                vocab_dict[table_name][column_name][0].append(str(token_group))
+
                         type_id = typetoken
                         token_group = [itemtoken]
                         if typetoken == self.sep_type_id:
