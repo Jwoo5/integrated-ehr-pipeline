@@ -72,7 +72,7 @@ class MIMICIV(EHR):
                 "code": ["itemid"],
                 "desc": ["hosp/d_labitems" + self.ext],
                 "desc_key": ["label"],
-                "numeric": ["value", "valuenum", "ref_range_lower", "ref_range_upper"]
+                "numeric": ["valuenum", "ref_range_lower", "ref_range_upper"]
             },
             {
                 "fname": "hosp/prescriptions" + self.ext,
@@ -88,7 +88,7 @@ class MIMICIV(EHR):
                     "formulary_drug_cd",
                     "stoptime",
                 ],
-                "numeric": ["dose_val_rx", "form_val_disp", "doses_per_24_hrs"]
+                "numeric": ["doses_per_24_hrs"] 
             },
             {
                 "fname": "icu/inputevents" + self.ext,
