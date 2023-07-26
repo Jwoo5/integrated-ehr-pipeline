@@ -520,15 +520,15 @@ class eICU(EHR):
             merge = merge.join(
                 F.broadcast(dialysis_multihosp), on=self.patient_key, how="leftanti"
             )
-        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size) timestamp
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before pred_size timestamp
 
-        merge = merge.filter(F.col(timestamp) >= self.obs_size * 60)
+        merge = merge.filter(F.col(timestamp) >= self.pred_size * 60)
         window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
 
         for horizon in horizons:
             horizon_merge = merge.filter(
-                F.col(timestamp) < (self.obs_size + horizon * 24) * 60
-            ).filter(F.col(timestamp) >= (self.obs_size + (horizon - 1) * 24) * 60)
+                F.col(timestamp) < (self.pred_size + horizon * 24) * 60
+            ).filter(F.col(timestamp) >= (self.pred_size + (horizon - 1) * 24) * 60)
             horizon_agg = (
                 horizon_merge.withColumn("row", F.row_number().over(window))
                 .filter(F.col("row") == 1)

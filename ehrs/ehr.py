@@ -62,6 +62,7 @@ class EHR(object):
         assert self.min_age <= self.max_age, (self.min_age, self.max_age)
 
         self.obs_size = cfg.obs_size
+        self.pred_size = cfg.pred_size
 
         # tasks
         self.mortality = cfg.mortality
@@ -105,6 +106,8 @@ class EHR(object):
 
         self._icustay_key = None
         self._hadm_key = None
+
+        self.use_ed = cfg.use_ed
 
     @property
     def icustay_fname(self):
@@ -158,9 +161,7 @@ class EHR(object):
 
         logger.info("Start building cohorts for {}".format(self.ehr_name))
 
-        obs_size = self.obs_size
-
-        icustays = icustays[icustays["LOS"] >= obs_size / 24]
+        icustays = icustays[icustays["LOS"] >= self.obs_size / 24]
 
         icustays = icustays[
             (self.min_age <= icustays["AGE"]) & (icustays["AGE"] <= self.max_age)
@@ -220,7 +221,7 @@ class EHR(object):
             for i in self.mortality:
                 labeled_cohorts["mortality_{}".format(i)] = (
                     cohorts["DEATHTIME"] - cohorts["INTIME"]
-                    < self.obs_size * 60 + i * 60 * 24
+                    < self.pred_size * 60 + i * 60 * 24
                 ).astype(int)
 
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
@@ -241,13 +242,17 @@ class EHR(object):
         else:
             logger.info("Start Preprocessing Tables")
 
+        if self.use_ed:
+            ed = spark.read.csv(
+                os.path.join(self.data_dir, self._ed_fname), header=True
+            ).select(self.hadm_key, self._ed_key, "intime", "outtime")
+
         events_dfs = []
         for table in self.tables:
             fname = table["fname"]
             table_name = fname.split("/")[-1][: -len(self.ext)]
             timestamp_key = table["timestamp"]
             excludes = table["exclude"]
-            obs_size = self.obs_size
             logger.info("{} in progress.".format(fname))
 
             code_to_descriptions = None
@@ -271,6 +276,21 @@ class EHR(object):
                             fname, [self.icustay_key, self.hadm_key]
                         )
                     )
+
+            if "ed/" in fname and table["timeoffsetunit"] == "abs":
+                # join ed table & set as hadm_id & drop ed key
+                # Since unit is abs -> do not need to additionally process time
+                events = events.join(
+                    F.broadcast(ed),
+                    on=self._ed_key,
+                    how="left",
+                )
+                if table["timestamp"] == "ED_INTIME":
+                    events = events.withColumnRenamed("intime", "ED_INTIME")
+                elif table["timestamp"] == "ED_OUTTIME":
+                    events = events.withColumnRenamed("outtime", "ED_OUTTIME")
+
+                events = events.drop(self._ed_key, "intime", "outtime")
 
             events = events.drop(*excludes)
             if table["timeoffsetunit"] == "abs":
@@ -329,7 +349,7 @@ class EHR(object):
             else:
                 raise NotImplementedError()
 
-            events = events.filter(F.col("TIME") < obs_size * 60)
+            events = events.filter(F.col("TIME") < self.pred_size * 60)
 
             events = events.drop("INTIME", "ADMITTIME", self.hadm_key)
 
@@ -482,7 +502,7 @@ class EHR(object):
 
             hi_start = []
             fl_start = []
-            for time in range(self.obs_size):
+            for time in range(self.pred_size):
                 event_idx = np.searchsorted(df["TIME"].values, time * 60)
                 hi_start.append(event_idx)
                 fl_start.append(flatten_lens[event_idx])

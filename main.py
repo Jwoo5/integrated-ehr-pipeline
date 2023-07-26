@@ -93,7 +93,10 @@ def get_parser():
         "--max_age", type=int, default=None, help="max age to skip too old patients"
     )
     parser.add_argument(
-        "--obs_size", type=int, default=12, help="observation window size by the hour"
+        "--obs_size", type=int, default=48, help="Restrict cohorts (ex. los>obs_size)"
+    )
+    parser.add_argument(
+        "--pred_size", type=int, default=48, help="Prediction points from icu adm (ex. pred at pred_size)"
     )
 
     # tasks
@@ -174,6 +177,12 @@ def get_parser():
         "--use_more_tables",
         action="store_true",
         help="Use more tables including chartevents, Not supported on MIMIC-III",
+    )
+
+    parser.add_argument(
+        "--use_ed",
+        action="store_true",
+        help="Use ED data, Only supported for MIMIC-IV",
     )
 
     parser.add_argument(

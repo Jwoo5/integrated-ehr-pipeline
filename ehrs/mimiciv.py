@@ -350,6 +350,42 @@ class MIMICIV(EHR):
                 },
             ]
 
+        if cfg.use_ed:
+            self._ed_fname = "ed/edstays" + self.ext
+            self._ed_key = "stay_id"
+            self.tables += [
+                {
+                    "fname": "ed/medrecon" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["gsn", "ndc", "etc_rn", "etccode", "subject_id"],
+                },
+                {
+                    "fname": "ed/pyxis" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["med_rn", "gsn", "gsn_rn", "subject_id"],
+                },
+                {
+                    "fname": "ed/vitalsign" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["subject_id"],
+                },
+                {
+                    "fname": "ed/diagnosis" + self.ext,
+                    "timestamp": "ED_OUTTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["subject_id", "icd_code"],
+                },
+                {
+                    "fname": "ed/triage" + self.ext,
+                    "timestamp": "ED_INTIME",
+                    "timeoffsetunit": "abs",
+                    "exclude": ["subject_id"],
+                },
+            ]
+
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
@@ -544,7 +580,7 @@ class MIMICIV(EHR):
         merge = merge.withColumn(timestamp, F.to_timestamp(timestamp))
 
         # Filter Dialysis at here to use abs timestamp & agg by patient_key
-        # For Creatinine task, eliminate icus if patient went through dialysis treatment before (obs_size + pred_size / outtime) timestamp
+        # For Creatinine task, eliminate icus if patient went through dialysis treatment before pred_size timestamp
         # Filtering base on https://github.com/MIT-LCP/mimic-code/blob/main/mimic-iv/concepts/treatment/rrt.sql (Dialysis Active)
         if task == "creatinine":
             dialysis_tables = self.task_itemids["dialysis"]["tables"]
@@ -615,15 +651,15 @@ class MIMICIV(EHR):
             ),
         )
 
-        merge = merge.filter(F.col(timestamp) >= F.col("INTIME") + self.obs_size * 60)
+        merge = merge.filter(F.col(timestamp) >= F.col("INTIME") + self.pred_size * 60)
         window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
 
         for horizon in horizons:
             horizon_merge = merge.filter(
-                F.col(timestamp) < F.col("INTIME") + (self.obs_size + horizon * 24) * 60
+                F.col(timestamp) < F.col("INTIME") + (self.pred_size + horizon * 24) * 60
             ).filter(
                 F.col(timestamp)
-                >= F.col("INTIME") + (self.obs_size + (horizon - 1) * 24) * 60
+                >= F.col("INTIME") + (self.pred_size + (horizon - 1) * 24) * 60
             )
             horizon_agg = (
                 horizon_merge.withColumn("row", F.row_number().over(window))
