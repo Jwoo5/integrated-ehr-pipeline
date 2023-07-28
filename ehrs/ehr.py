@@ -591,7 +591,7 @@ class EHR(object):
                 len(cohorts) - len(active_stay_ids)
             )
         )
-        cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
+
         cohorts.reset_index(drop=True, inplace=True)
 
         # Should consider pat_id for split
@@ -627,14 +627,24 @@ class EHR(object):
                 f"split_{seed}",
             ] = "train"
 
-        for stay_id_file in tqdm(
-            os.listdir(os.path.join(self.cache_dir, self.ehr_name))
-        ):
-            stay_id = stay_id_file.split(".")[0]
-            with open(
-                os.path.join(self.cache_dir, self.ehr_name, stay_id_file), "rb"
-            ) as f:
-                data = pickle.load(f)
+        for stay_id in tqdm(cohorts[self.icustay_key].values):
+            # Although the events does not exist, we still need to create the empty array
+            if os.path.exists(
+                os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl")
+            ):
+                with open(
+                    os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "rb"
+                ) as f:
+                    data = pickle.load(f)
+            else:
+                data = {
+                    "hi": np.ones((1, 3, self.max_event_token_len), dtype=np.int16), # if zero -> cause nan
+                    "fl": np.ones((1, 3), dtype=np.int16),
+                    "hi_start": np.zeros(self.pred_size, dtype=np.int16),
+                    "fl_start": np.zeros(self.pred_size, dtype=np.int16),
+                    "fl_lens": np.zeros(1, dtype=np.int16),
+                    "time": np.zeros(1, dtype=np.int16),
+                }
             stay_g = ehr_g.create_group(str(stay_id))
             stay_g.create_dataset(
                 "hi", data=data["hi"], dtype="i2", compression="lzf", shuffle=True
