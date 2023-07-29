@@ -638,8 +638,10 @@ class EHR(object):
                     data = pickle.load(f)
             else:
                 data = {
-                    "hi": np.ones((1, 3, self.max_event_token_len), dtype=np.int16), # if zero -> cause nan
-                    "fl": np.ones((1, 3), dtype=np.int16),
+                    "hi": np.ones(
+                        (1, 3, self.max_event_token_len), dtype=np.int16
+                    ),  # if zero -> cause nan
+                    "fl": np.ones((3, 1), dtype=np.int16),
                     "hi_start": np.zeros(self.pred_size, dtype=np.int16),
                     "fl_start": np.zeros(self.pred_size, dtype=np.int16),
                     "fl_lens": np.zeros(1, dtype=np.int16),
