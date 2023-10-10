@@ -490,7 +490,7 @@ class MIMICIV(EHR):
 
         icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
         icustays.loc[:, "INTIME"] = pd.to_datetime(
-            icustays["INTIME"], infer_datetime_format=True
+            icustays["INTIME"], infer_datetime_format=True, utc=True
         )
 
         icustays = icustays.merge(patients, on="subject_id", how="left")
@@ -513,14 +513,14 @@ class MIMICIV(EHR):
         )
 
         icustays["ADMITTIME"] = pd.to_datetime(
-            icustays["ADMITTIME"], infer_datetime_format=True
+            icustays["ADMITTIME"], infer_datetime_format=True, utc=True
         )
         icustays["INTIME"] = (
-            pd.to_datetime(icustays["INTIME"], infer_datetime_format=True)
+            pd.to_datetime(icustays["INTIME"], infer_datetime_format=True, utc=True)
             - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
         icustays["DEATHTIME"] = (
-            pd.to_datetime(icustays["DEATHTIME"], infer_datetime_format=True)
+            pd.to_datetime(icustays["DEATHTIME"], infer_datetime_format=True, utc=True)
             - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
 
@@ -656,7 +656,8 @@ class MIMICIV(EHR):
 
         for horizon in horizons:
             horizon_merge = merge.filter(
-                F.col(timestamp) < F.col("INTIME") + (self.pred_size + horizon * 24) * 60
+                F.col(timestamp)
+                < F.col("INTIME") + (self.pred_size + horizon * 24) * 60
             ).filter(
                 F.col(timestamp)
                 >= F.col("INTIME") + (self.pred_size + (horizon - 1) * 24) * 60
