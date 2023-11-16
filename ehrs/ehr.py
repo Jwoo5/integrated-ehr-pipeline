@@ -90,15 +90,6 @@ class EHR(object):
         self.cls_token_id = self.tokenizer.cls_token_id
         self.sep_token_id = self.tokenizer.sep_token_id
 
-        self.table_type_id = 1
-        self.column_type_id = 2
-        self.value_type_id = 3
-        self.timeint_type_id = 4
-        self.cls_type_id = 5
-        self.sep_type_id = 6
-
-        self.others_dpe_id = 0
-
         self._icustay_fname = None
         self._patient_fname = None
         self._admission_fname = None
@@ -108,6 +99,7 @@ class EHR(object):
         self._hadm_key = None
 
         self.use_ed = cfg.use_ed
+        self.custom_split_path = cfg.custom_split_path
 
     @property
     def icustay_fname(self):
@@ -232,7 +224,7 @@ class EHR(object):
 
     def process_tables(self, cohorts, spark):
         # in: cohorts, sparksession
-        # out: Spark DataFrame with (stay_id, time offset, inp, type, dpe)
+        # out: Spark DataFrame with (stay_id, time offset, inp)
         if isinstance(cohorts, pd.DataFrame):
             logger.info(
                 "Start Preprocessing Tables, Cohort Numbers: {}".format(len(cohorts))
@@ -360,115 +352,61 @@ class EHR(object):
                     )
                     events = events.withColumn(col, mapping_expr[F.col(col)])
 
-            def process_unit(text, type_id):
-                # Given (table_name|col|val), generate ([inp], [type], [dpe])
+            def process_unit(text):
+                # Given (table_name|col|val), generate ([inp])
                 text = re.sub(
                     r"\d*\.\d+", lambda x: str(round(float(x.group(0)), 4)), str(text)
                 )
-                number_groups = [
-                    g for g in re.finditer(r"([0-9]+([.][0-9]*)?|[0-9]+|\.+)", text)
-                ]
                 text = re.sub(r"([0-9\.])", r" \1 ", text)
                 input_ids = self.tokenizer.encode(text, add_special_tokens=False)
-                types = [type_id] * len(input_ids)
+                
+                return input_ids
 
-                def get_dpe(tokens, number_groups):
-                    number_ids = [121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 119]
-                    numbers = [i for i, j in enumerate(tokens) if j in number_ids]
-                    numbers_cnt = 0
-                    data_dpe = [0] * len(tokens)
-                    for group in number_groups:
-                        if group[0] == "." * len(group[0]):
-                            numbers_cnt += len(group[0])
-                            continue
-
-                        start = numbers[numbers_cnt]
-                        end = numbers[numbers_cnt + len(group[0]) - 1] + 1
-                        corresponding_numbers = tokens[start:end]
-                        digits = [
-                            i for i, j in enumerate(corresponding_numbers) if j == 119
-                        ]
-
-                        # Case Integer
-                        if len(digits) == 0:
-                            data_dpe[start:end] = list(range(len(group[0]) + 5, 5, -1))
-                        # Case Float
-                        elif len(digits) == 1:
-                            digit_idx = len(group[0]) - digits[0]
-                            data_dpe[start:end] = list(
-                                range(len(group[0]) + 5 - digit_idx, 5 - digit_idx, -1)
-                            )
-                        else:
-                            logger.warn(
-                                f"{data_dpe[start:end]} has irregular numerical formats"
-                            )
-
-                        numbers_cnt += len(group[0])
-                    return data_dpe
-
-                dpes = get_dpe(input_ids, number_groups)
-                return input_ids, types, dpes
-
-            encoded_table_name = process_unit(table_name, self.table_type_id)
+            encoded_table_name = process_unit(table_name)
             encoded_cols = {
-                k: process_unit(k, self.column_type_id) for k in events.columns
+                k: process_unit(k) for k in events.columns
             }
-
-            schema = StructType(
-                [
-                    StructField("INPUTS", ArrayType(IntegerType()), False),
-                    StructField("TYPES", ArrayType(IntegerType()), False),
-                    StructField("DPES", ArrayType(IntegerType()), False),
-                ]
-            )
 
             def process_row(encoded_table_name, encoded_cols):
                 def _process_row(row):
                     """
                     input: row (cols: icustay_id, timestamp, ...)
-                    output: (input, type, dpe)
+                    output: (input)
                     """
                     row = row.asDict()
                     # Should INITIALIZE with blank arrays to prevent corruption in Pyspark... Why??
-                    input_ids, types, dpes = [], [], []
-                    input_ids += encoded_table_name[0]
-                    types += encoded_table_name[1]
-                    dpes += encoded_table_name[2]
-                    encoded_table_name
+                    input_ids = []
+                    input_ids += encoded_table_name
+
                     for col, val in row.items():
                         if col in [self.icustay_key, "TIME"]:
                             continue
                         if val is None:
                             continue
                         encoded_col = encoded_cols[col]
-                        encoded_val = process_unit(val, self.value_type_id)
+                        encoded_val = process_unit(val)
                         if (
                             len(input_ids)
-                            + len(encoded_col[0])
-                            + len(encoded_val[0])
+                            + len(encoded_col)
+                            + len(encoded_val)
                             + 2
                             <= self.max_event_token_len
                         ):
-                            input_ids += encoded_col[0] + encoded_val[0]
-                            types += encoded_col[1] + encoded_val[1]
-                            dpes += encoded_col[2] + encoded_val[2]
+                            input_ids += encoded_col + encoded_val
                         else:
                             break
-                    return input_ids, types, dpes
+                    return input_ids
 
-                return F.udf(_process_row, returnType=schema)
+                return F.udf(_process_row, returnType=ArrayType(IntegerType()))
 
             events = (
                 events.withColumn(
-                    "tmp",
+                    "INPUTS",
                     process_row(encoded_table_name, encoded_cols)(
                         F.struct(*events.columns)
                     ),
                 )
-                .withColumn("INPUTS", F.col("tmp.INPUTS"))
-                .withColumn("TYPES", F.col("tmp.TYPES"))
-                .withColumn("DPES", F.col("tmp.DPES"))
-                .select(self.icustay_key, "TIME", "INPUTS", "TYPES", "DPES")
+                .select(self.icustay_key, "TIME", "INPUTS")
             )
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
@@ -515,12 +453,8 @@ class EHR(object):
             )
 
             hi_input = make_hi(self.cls_token_id, self.sep_token_id, df["INPUTS"])
-            hi_type = make_hi(self.cls_type_id, self.sep_type_id, df["TYPES"])
-            hi_dpe = make_hi(self.others_dpe_id, self.others_dpe_id, df["DPES"])
 
             fl_input = make_fl(self.cls_token_id, self.sep_token_id, df["INPUTS"])
-            fl_type = make_fl(self.cls_type_id, self.sep_type_id, df["TYPES"])
-            fl_dpe = make_fl(self.others_dpe_id, self.others_dpe_id, df["DPES"])
 
             assert len(hi_input) <= self.max_event_size, hi_input
             assert all([len(i) <= self.max_event_token_len for i in hi_input]), hi_input
@@ -533,24 +467,13 @@ class EHR(object):
                     for i in hi_input
                 ]
             )
-            hi_type = np.array(
-                [
-                    np.pad(i, (0, self.max_event_token_len - len(i)), mode="constant")
-                    for i in hi_type
-                ]
-            )
-            hi_dpe = np.array(
-                [
-                    np.pad(i, (0, self.max_event_token_len - len(i)), mode="constant")
-                    for i in hi_dpe
-                ]
-            )
+            fl_input = np.array(fl_input)
 
             stay_id = df[self.icustay_key].values[0]
             # Create caches (cannot write to hdf5 directly with pyspark)
             data = {
-                "hi": np.stack([hi_input, hi_type, hi_dpe], axis=1).astype(np.int16),
-                "fl": np.stack([fl_input, fl_type, fl_dpe], axis=0).astype(np.int16),
+                "hi": hi_input.astype(np.int16),
+                "fl": fl_input.astype(np.int16),
                 "hi_start": hi_start,
                 "fl_start": fl_start,
                 "fl_lens": flatten_lens,
@@ -594,38 +517,51 @@ class EHR(object):
 
         cohorts.reset_index(drop=True, inplace=True)
 
-        # Should consider pat_id for split
-        for seed in self.seed:
-            shuffled = (
-                cohorts.groupby(self.patient_key)[self.patient_key]
-                .count()
-                .sample(frac=1, random_state=seed)
-            )
-            cum_len = shuffled.cumsum()
 
-            cohorts.loc[
-                cohorts[self.patient_key].isin(
-                    shuffled[cum_len < int(sum(shuffled) * self.valid_percent)].index
-                ),
-                f"split_{seed}",
-            ] = "test"
-            cohorts.loc[
-                cohorts[self.patient_key].isin(
-                    shuffled[
-                        (cum_len >= int(sum(shuffled) * self.valid_percent))
-                        & (cum_len < int(sum(shuffled) * 2 * self.valid_percent))
-                    ].index
-                ),
-                f"split_{seed}",
-            ] = "valid"
-            cohorts.loc[
-                cohorts[self.patient_key].isin(
-                    shuffled[
-                        cum_len >= int(sum(shuffled) * 2 * self.valid_percent)
-                    ].index
-                ),
-                f"split_{seed}",
-            ] = "train"
+        # Support Custom Split
+        if self.custom_split_path is not None:
+            custom_split = pd.read_json(self.custom_split_path, orient="records", lines=True)
+            # based on subject_id (patient_key)
+            get_ids = lambda split: [int(i) for i in custom_split[split][0]]            
+            train_ids, valid_ids, test_ids = get_ids("train"), get_ids("valid"), get_ids("test")
+
+            cohorts.loc[cohorts[self.patient_key].isin(train_ids), "split"] = "train"
+            cohorts.loc[cohorts[self.patient_key].isin(valid_ids), "split"] = "valid"
+            cohorts.loc[cohorts[self.patient_key].isin(test_ids), "split"] = "test"
+
+        else:
+            # Should consider pat_id for split
+            for seed in self.seed:
+                shuffled = (
+                    cohorts.groupby(self.patient_key)[self.patient_key]
+                    .count()
+                    .sample(frac=1, random_state=seed)
+                )
+                cum_len = shuffled.cumsum()
+
+                cohorts.loc[
+                    cohorts[self.patient_key].isin(
+                        shuffled[cum_len < int(sum(shuffled) * self.valid_percent)].index
+                    ),
+                    f"split_{seed}",
+                ] = "test"
+                cohorts.loc[
+                    cohorts[self.patient_key].isin(
+                        shuffled[
+                            (cum_len >= int(sum(shuffled) * self.valid_percent))
+                            & (cum_len < int(sum(shuffled) * 2 * self.valid_percent))
+                        ].index
+                    ),
+                    f"split_{seed}",
+                ] = "valid"
+                cohorts.loc[
+                    cohorts[self.patient_key].isin(
+                        shuffled[
+                            cum_len >= int(sum(shuffled) * 2 * self.valid_percent)
+                        ].index
+                    ),
+                    f"split_{seed}",
+                ] = "train"
 
         for stay_id in tqdm(cohorts[self.icustay_key].values):
             # Although the events does not exist, we still need to create the empty array
@@ -639,9 +575,9 @@ class EHR(object):
             else:
                 data = {
                     "hi": np.ones(
-                        (1, 3, self.max_event_token_len), dtype=np.int16
+                        (1, self.max_event_token_len), dtype=np.int16
                     ),  # if zero -> cause nan
-                    "fl": np.ones((3, 1), dtype=np.int16),
+                    "fl": np.ones((1), dtype=np.int16),
                     "hi_start": np.zeros(self.pred_size, dtype=np.int16),
                     "fl_start": np.zeros(self.pred_size, dtype=np.int16),
                     "fl_lens": np.zeros(1, dtype=np.int16),

@@ -66,7 +66,7 @@ class MIMICIV(EHR):
                 "fname": "hosp/labevents" + self.ext,
                 "timestamp": "charttime",
                 "timeoffsetunit": "abs",
-                "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id"],
+                "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id", "order_provider_id"],
                 "code": ["itemid"],
                 "desc": ["hosp/d_labitems" + self.ext],
                 "desc_key": ["label"],
@@ -84,6 +84,7 @@ class MIMICIV(EHR):
                     "poe_seq",
                     "formulary_drug_cd",
                     "stoptime",
+                    "order_provider_id",
                 ],
             },
             {
@@ -98,6 +99,7 @@ class MIMICIV(EHR):
                     "subject_id",
                     "continueinnextdept",
                     "statusdescription",
+                    "caregiver_id",
                 ],
                 "code": ["itemid"],
                 "desc": ["icu/d_items" + self.ext],
@@ -297,6 +299,7 @@ class MIMICIV(EHR):
                     "exclude": [
                         "storetime",
                         "subject_id",
+                        "caregiver_id",
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
@@ -309,6 +312,7 @@ class MIMICIV(EHR):
                     "exclude": [
                         "storetime",
                         "subject_id",
+                        "caregiver_id",
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
@@ -329,6 +333,7 @@ class MIMICIV(EHR):
                         "test_itemid",
                         "org_itemid",
                         "ab_itemid",
+                        "order_provider_id",
                     ],
                 },
                 {
@@ -343,6 +348,7 @@ class MIMICIV(EHR):
                         "linkorderid",
                         "continueinnextdept",
                         "statusdescription",
+                        "caregiver_id",
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
@@ -735,13 +741,13 @@ class MIMICIV(EHR):
 
     def infer_data_extension(self) -> str:
         if (
-            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv.gz"))) == 21
-            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv.gz"))) == 8
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv.gz"))) == 22
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv.gz"))) == 9
         ):
             ext = ".csv.gz"
         elif (
-            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv"))) == 21
-            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv"))) == 8
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv"))) == 22
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv"))) == 9
         ):
             ext = ".csv"
         else:

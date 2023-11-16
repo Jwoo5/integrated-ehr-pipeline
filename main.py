@@ -186,6 +186,11 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--custom_split_path",
+        type=str,
+    )
+
+    parser.add_argument(
         "--num_threads", type=int, default=8, help="number of threads to use"
     )
 
