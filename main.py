@@ -186,6 +186,12 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--lab_only",
+        action="store_true",
+        help="Use only lab events as input",
+    )
+
+    parser.add_argument(
         "--num_threads", type=int, default=8, help="number of threads to use"
     )
 

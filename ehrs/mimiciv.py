@@ -386,6 +386,9 @@ class MIMICIV(EHR):
                 },
             ]
 
+        if self.lab_only:
+            self.tables = [self.tables[0]]
+
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"

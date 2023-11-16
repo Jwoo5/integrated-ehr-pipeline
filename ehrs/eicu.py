@@ -255,6 +255,9 @@ class eICU(EHR):
                 },
             }
 
+        if self.lab_only:
+            self.tables = [self.tables[0]]
+            
         self._icustay_key = "patientunitstayid"
         self._hadm_key = "patienthealthsystemstayid"
         self._patient_key = "uniquepid"
