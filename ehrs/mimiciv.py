@@ -451,22 +451,22 @@ class MIMICIV(EHR):
 
         logger.info("Start labeling cohorts for clinical task prediction.")
         labeled_cohorts = spark.createDataFrame(labeled_cohorts)
-        for clinical_task in [
-            "creatinine",
-            "platelets",
-            "wbc",
-            "hb",
-            "bicarbonate",
-            "sodium",
-        ]:
-            horizons = self.__getattribute__(clinical_task)
-            if horizons:
-                labeled_cohorts = self.clinical_task(
-                    labeled_cohorts,
-                    clinical_task,
-                    horizons,
-                    spark,
-                )
+        # for clinical_task in [
+        #     "creatinine",
+        #     "platelets",
+        #     "wbc",
+        #     "hb",
+        #     "bicarbonate",
+        #     "sodium",
+        # ]:
+        #     horizons = self.__getattribute__(clinical_task)
+        #     if horizons:
+        #         labeled_cohorts = self.clinical_task(
+        #             labeled_cohorts,
+        #             clinical_task,
+        #             horizons,
+        #             spark,
+        #         )
 
         logger.info("Done preparing clinical task prediction for the given cohorts")
         labeled_cohorts = labeled_cohorts.toPandas()

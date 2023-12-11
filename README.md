@@ -17,5 +17,5 @@ main.py --ehr {eicu, mimiciii, mimiciv}
 
 - Run Command For Final Command
 ```bash
-python main.py --ehr mimiciv --data /home/data_storage/MIMIC-IV-2.0/ --obs_size 24 --pred_size 24 --max_patient_token_len 2147483647 --max_event_size 2147483647 --dest /nfs_edlab/junukim/LLM_Pred_data/24/ --num_threads 32 --readmission --diagnosis --min_event_size 0 --seed "2020, 2021, 2022, 2023, 2024" --lab_only --cache
+python main.py --ehr mimiciv --data /home/data_storage/MIMIC-IV-2.0/ --obs_size 24 --pred_size 24 --max_patient_token_len 2147483647 --max_event_size 2147483647 --dest /nfs_edlab/junukim/LLM_Pred_data/24h/ --num_threads 32 --readmission --diagnosis --min_event_size 0 --seed "2020, 2021, 2022, 2023, 2024" --lab_only --cache
 ```

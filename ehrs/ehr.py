@@ -200,7 +200,7 @@ class EHR(object):
                 "ADMITTIME",
                 "DEATHTIME",
                 "LOS",
-                "readmission",
+                # "readmission",
             ]
         ].copy()
 
@@ -261,6 +261,11 @@ class EHR(object):
                 }
 
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+            events = events.filter(
+                F.col('itemid')==50931
+            ).filter(
+                F.col('valuenum').isNotNull()
+            )
             if self.icustay_key not in events.columns:
                 if self.hadm_key not in events.columns:
                     raise AssertionError(
@@ -292,7 +297,7 @@ class EHR(object):
                 # HADM Join -> duplicated by icy ids -> can process w.  intime
                 events = events.join(
                     cohorts.select(
-                        self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME"
+                        self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME", "LOS"
                     ),
                     on=self.hadm_key,
                     how="right",
@@ -330,7 +335,7 @@ class EHR(object):
                     how="right",
                 )
                 events = events.join(
-                    cohorts.select(self.icustay_key, "INTIME", "ADMITTIME"),
+                    cohorts.select(self.icustay_key, "INTIME", "ADMITTIME", "LOS"),
                     on=self.icustay_key,
                     how="right",
                 )
@@ -340,8 +345,10 @@ class EHR(object):
 
             else:
                 raise NotImplementedError()
-
-            events = events.filter(F.col("TIME") < self.pred_size * 60)
+            events = events.filter(F.col("TIME") >= 0)
+            events = events.filter(F.col("TIME") < F.col("LOS") * 60 * 24) # Only
+            events = events.drop("LOS")
+            # events = events.filter(F.col("TIME") < self.pred_size * 60)
 
             events = events.drop("INTIME", "ADMITTIME", self.hadm_key)
 
@@ -396,6 +403,8 @@ class EHR(object):
             # Actually, this function does not have to return anything.
             # However, return something(TIME) is required to satisfy the PySpark requirements.
             df = events.sort_values("TIME")
+            if len(df)<=self.min_event_size:
+                return events["TIME"].to_frame()
             data = {
                 "time": df["TIME"].values,
                 "text": df["TEXT"].values,
