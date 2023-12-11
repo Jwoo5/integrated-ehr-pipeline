@@ -261,10 +261,10 @@ class EHR(object):
                 }
 
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
-            events = events.filter(
-                F.col('itemid')==50931
-            ).filter(
-                F.col('valuenum').isNotNull()
+            events = (
+                events.filter(F.col("itemid") == 50931)
+                .filter(F.col("valuenum").isNotNull())
+                .filter(F.col("comments") != "___")  # Mostly erronous values
             )
             if self.icustay_key not in events.columns:
                 if self.hadm_key not in events.columns:
@@ -346,7 +346,7 @@ class EHR(object):
             else:
                 raise NotImplementedError()
             events = events.filter(F.col("TIME") >= 0)
-            events = events.filter(F.col("TIME") < F.col("LOS") * 60 * 24) # Only
+            events = events.filter(F.col("TIME") < F.col("LOS") * 60 * 24)  # Only
             events = events.drop("LOS")
             # events = events.filter(F.col("TIME") < self.pred_size * 60)
 
@@ -364,7 +364,6 @@ class EHR(object):
             #     k: process_unit(k) for k in events.columns
             # }
 
-
             def process_row(table_name):
                 def _process_row(row):
                     """
@@ -380,20 +379,15 @@ class EHR(object):
                         if val is None:
                             continue
                         text += " " + col + " " + str(val)
-                        
+
                     return text
 
                 return F.udf(_process_row, returnType=StringType())
 
-            events = (
-                events.withColumn(
-                    "TEXT",
-                    process_row(table_name)(
-                        F.struct(*events.columns)
-                    ),
-                )
-                .select(self.icustay_key, "TIME", "TEXT")
-            )
+            events = events.withColumn(
+                "TEXT",
+                process_row(table_name)(F.struct(*events.columns)),
+            ).select(self.icustay_key, "TIME", "TEXT")
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
 
@@ -403,7 +397,7 @@ class EHR(object):
             # Actually, this function does not have to return anything.
             # However, return something(TIME) is required to satisfy the PySpark requirements.
             df = events.sort_values("TIME")
-            if len(df)<=self.min_event_size:
+            if len(df) <= self.min_event_size:
                 return events["TIME"].to_frame()
             data = {
                 "time": df["TIME"].values,
@@ -491,9 +485,7 @@ class EHR(object):
                 data = pickle.load(f)
 
             stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset(
-                "text", data=data['text'] # Save as Unicode Bytes
-            )
+            stay_g.create_dataset("text", data=data["text"])  # Save as Unicode Bytes
             stay_g.create_dataset("time", data=data["time"], dtype="i")
 
             corresponding_idx = cohorts.index[
