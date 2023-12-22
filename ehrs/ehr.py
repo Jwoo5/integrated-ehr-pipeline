@@ -1,7 +1,5 @@
 import logging
 import os
-import pickle
-import re
 import shutil
 import subprocess
 import sys
@@ -9,12 +7,16 @@ from functools import reduce
 from itertools import chain
 from typing import List, Union
 
-import h5py
-import numpy as np
 import pandas as pd
 import pyspark.sql.functions as F
-from pyspark.sql.types import StringType
-from tqdm import tqdm
+from datasets import Dataset, Features, Sequence, Value
+from pyspark.sql.types import (
+    ArrayType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+)
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
@@ -395,57 +397,55 @@ class EHR(object):
         return reduce(lambda x, y: x.union(y), events_dfs)
 
     def make_input(self, cohorts, events, spark):
-        @F.pandas_udf(returnType="TIME int", functionType=F.PandasUDFType.GROUPED_MAP)
+        schema = StructType(
+            [
+                StructField("stay_id", IntegerType(), True),
+                StructField("time", ArrayType(IntegerType()), True),
+                StructField("text", ArrayType(StringType()), True),
+            ]
+        )
+
+        @F.pandas_udf(returnType=schema, functionType=F.PandasUDFType.GROUPED_MAP)
         def _make_input(events):
             # Actually, this function does not have to return anything.
             # However, return something(TIME) is required to satisfy the PySpark requirements.
             df = events.sort_values("TIME")
             if len(df) <= self.min_event_size:
-                return events["TIME"].to_frame()
-            data = {
-                "time": df["TIME"].values,
-                "text": df["TEXT"].values,
-            }
-
-            stay_id = df[self.icustay_key].values[0]
-            # Create caches (cannot write to hdf5 directly with pyspark)
-            with open(
-                os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "wb"
-            ) as f:
-                pickle.dump(data, f)
-            return events["TIME"].to_frame()
-
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        os.makedirs(os.path.join(self.cache_dir, self.ehr_name), exist_ok=True)
-
-        if isinstance(cohorts, pd.DataFrame):
-            cohorts = spark.createDataFrame(cohorts)
-
-        # Allow duplication
-        events.groupBy(self.icustay_key).apply(_make_input).write.mode(
-            "overwrite"
-        ).format("noop").save()
-
-        logger.info("Finish Data Preprocessing. Start to write to hdf5")
-
-        f = h5py.File(os.path.join(self.dest, f"{self.ehr_name}.h5"), "w")
-        ehr_g = f.create_group("ehr")
+                return pd.DataFrame(columns=["stay_id", "time", "text"])
+            return pd.DataFrame(
+                [
+                    {
+                        "stay_id": int(df[self.icustay_key].values[0]),
+                        "time": df["TIME"].values,
+                        "text": df["TEXT"].values,
+                    }
+                ]
+            )
 
         if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
-        cohorts[["time"]] = None
+        # Allow duplication
+        events = events.groupBy(self.icustay_key).apply(_make_input)
 
-        active_stay_ids = [
-            int(i.split(".")[0])
-            for i in os.listdir(os.path.join(self.cache_dir, self.ehr_name))
-        ]
+        features = Features(
+            {
+                "stay_id": Value(dtype="int32"),
+                "time": Sequence(feature=Value(dtype="int32")),
+                "text": Sequence(feature=Value(dtype="string")),
+            }
+        )
+        # Flush befor convert
+
+        dset = Dataset.from_spark(events, features=features)
+
+        processed_df = events.select("stay_id", "time").toPandas()
+        previous_len = len(cohorts)
+        cohorts = pd.merge(cohorts, processed_df, on="stay_id", how="inner")
         logger.info(
-            "Total {} patients in the cohort are skipped due to few events".format(
-                len(cohorts) - len(active_stay_ids)
+            "Total {} patients are skipped due to few events".format(
+                previous_len - len(cohorts)
             )
         )
-        cohorts = cohorts[cohorts[self.icustay_key].isin(active_stay_ids)]
-
         cohorts.reset_index(drop=True, inplace=True)
 
         # Should consider pat_id for split
@@ -481,35 +481,23 @@ class EHR(object):
                 f"split_{seed}",
             ] = "train"
 
-        for stay_id in tqdm(cohorts[self.icustay_key].values):
-            with open(
-                os.path.join(self.cache_dir, self.ehr_name, f"{stay_id}.pkl"), "rb"
-            ) as f:
-                data = pickle.load(f)
-
-            stay_g = ehr_g.create_group(str(stay_id))
-            stay_g.create_dataset("text", data=data["text"])  # Save as Unicode Bytes
-            stay_g.create_dataset("time", data=data["time"], dtype="i")
-
-            corresponding_idx = cohorts.index[
-                cohorts[self.icustay_key] == int(stay_id)
-            ][0]
-            row = cohorts.loc[corresponding_idx]
+        def mapper(x):
+            # Add metadata of each patient
+            stay_id = x[self.icustay_key]
+            row = cohorts.loc[cohorts[self.icustay_key] == stay_id].iloc[0]
             for col in cohorts.columns:
                 if col in ["ADMITTIME", "time"]:
                     continue
-                stay_g.attrs[col] = row[col]
+                x[col] = row[col]
+            return x
 
-            # If want to acceleate keys split in datasets, read df selectively
-            cohorts.at[corresponding_idx, "time"] = str(list(data["time"]))
+        dset = dset.map(mapper, num_proc=self.cfg.num_threads)
+        dset.save_to_disk(os.path.join(self.dest, self.ehr_name))
 
-        shutil.rmtree(os.path.join(self.cache_dir, self.ehr_name), ignore_errors=True)
-        # Drop patients with few events
         cohorts.to_csv(
             os.path.join(self.dest, f"{self.ehr_name}_cohort.csv"), index=False
         )
 
-        f.close()
         logger.info("Done encoding events.")
 
         return
