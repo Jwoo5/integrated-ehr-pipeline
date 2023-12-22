@@ -348,6 +348,9 @@ class EHR(object):
             events = events.filter(F.col("TIME") >= 0)
             events = events.filter(F.col("TIME") < F.col("LOS") * 60 * 24)  # Only
             events = events.drop("LOS")
+
+            events = events.dropDuplicates([self.icustay_key, "TIME"])
+
             # events = events.filter(F.col("TIME") < self.pred_size * 60)
 
             events = events.drop("INTIME", "ADMITTIME", self.hadm_key)
