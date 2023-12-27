@@ -263,11 +263,11 @@ class EHR(object):
                 }
 
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
-            events = (
-                events.filter(F.col("itemid") == 50931)
-                .filter(F.col("valuenum").isNotNull())
-                .filter(F.col("comments") != "___")  # Mostly erronous values
-            )
+            events = events.filter(F.col("itemid").isin(table["itemid"]))
+            if table_name == "labevents":
+                events = events.filter(F.col("valuenum").isNotNull()).filter(
+                    F.col("comments") != "___"
+                )  # Mostly erronous values
             if self.icustay_key not in events.columns:
                 if self.hadm_key not in events.columns:
                     raise AssertionError(
