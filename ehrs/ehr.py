@@ -317,6 +317,21 @@ class EHR(object):
                     )
                     - F.col("INTIME"),
                 )
+                events.show()
+                if "endtime" in events.columns:
+                    events = events.withColumn(
+                        "endtime",
+                        F.round(
+                            (
+                                (
+                                    F.to_timestamp("endtime").cast("long")
+                                    - F.col("ADMITTIME").cast("long")
+                                )
+                                / 60
+                            )
+                        )
+                        - F.col("INTIME"),
+                    )
                 events = events.drop(timestamp_key)
 
             elif table["timeoffsetunit"] == "min":
@@ -383,8 +398,8 @@ class EHR(object):
                             continue
                         if val is None:
                             continue
-                        text += " " + col + " " + str(val)
-
+                        # text += " " + col + " " + str(val)
+                        text += " " + str(val)
                     return text
 
                 return F.udf(_process_row, returnType=StringType())
