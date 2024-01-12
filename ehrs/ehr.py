@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -317,7 +318,6 @@ class EHR(object):
                     )
                     - F.col("INTIME"),
                 )
-                events.show()
                 if "endtime" in events.columns:
                     events = events.withColumn(
                         "endtime",
@@ -420,13 +420,24 @@ class EHR(object):
             ]
         )
 
-        @F.pandas_udf(returnType=schema, functionType=F.PandasUDFType.GROUPED_MAP)
         def _make_input(events):
             # Actually, this function does not have to return anything.
             # However, return something(TIME) is required to satisfy the PySpark requirements.
             df = events.sort_values("TIME")
             if len(df) <= self.min_event_size:
                 return pd.DataFrame(columns=["stay_id", "time", "text"])
+            # Remove duplicated glucoses (in lab/chart)
+            df["glucose_value"] = df["TEXT"].str.extract(
+                r"glucose.* (\d+)", flags=re.IGNORECASE, expand=False
+            )
+            df["is_glucose"] = df.apply(
+                lambda x: x["TEXT"] if pd.isna(x["glucose_value"]) else None, axis=1
+            )  # Prevent to drop dextrose/insulin
+            df.drop_duplicates(
+                subset=["glucose_value", "is_glucose", "TIME"],
+                inplace=True,
+                keep="last",
+            )  # Only for Glucoses.... Not for others...
             return pd.DataFrame(
                 [
                     {
@@ -440,7 +451,7 @@ class EHR(object):
         if not isinstance(cohorts, pd.DataFrame):
             cohorts = cohorts.toPandas()
         # Allow duplication
-        events = events.groupBy(self.icustay_key).apply(_make_input)
+        events = events.groupBy(self.icustay_key).applyInPandas(_make_input, schema)
 
         features = Features(
             {

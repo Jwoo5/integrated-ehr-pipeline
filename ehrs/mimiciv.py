@@ -81,7 +81,7 @@ class MIMICIV(EHR):
                 "code": ["itemid"],
                 "desc": ["hosp/d_labitems" + self.ext],
                 "desc_key": ["label"],
-                "itemid": [50931],  # Use Serum Glucose only
+                "itemid": [50809, 50931, 52569],  # Glucose
             },
             # in-icu insulin -> only in inputevents, insulins in pre are for non-icu
             {
@@ -136,6 +136,25 @@ class MIMICIV(EHR):
                     228140,
                     228141,
                     228142,
+                ],
+            },
+            {
+                "fname": "icu/chartevents" + self.ext,
+                "timestamp": "charttime",
+                "timeoffsetunit": "abs",
+                "exclude": [
+                    "storetime",
+                    "subject_id",
+                    "value",
+                    "warning",
+                ],
+                "code": ["itemid"],
+                "desc": ["icu/d_items" + self.ext],
+                "desc_key": ["label"],
+                "itemid": [
+                    220621,  # Glucose
+                    225664,
+                    226537,
                 ],
             },
         ]
