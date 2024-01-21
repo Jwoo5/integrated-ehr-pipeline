@@ -196,6 +196,10 @@ def get_parser():
         "--debug", action="store_true", help="whether to run in debug mode or not"
     )
 
+    parser.add_argument(
+        "--add_chart", action="store_true", help="whether to add chartevents or not"
+    )
+
     return parser
 
 

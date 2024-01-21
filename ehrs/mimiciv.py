@@ -127,24 +127,6 @@ class MIMICIV(EHR):
                 "mask_target": ["itemid"],
             },
             {
-                "fname": "icu/chartevents" + self.ext,
-                "timestamp": "charttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "stay_id",
-                    "charttime",
-                    "itemid",
-                    "value",
-                    "valuenum",
-                    "valueuom",
-                ],
-                "code": ["itemid"],
-                "desc": ["icu/d_items" + self.ext],
-                "desc_key": ["label"],
-                "mask_target": ["itemid"],
-            },
-            {
                 "fname": "icu/outputevents" + self.ext,
                 "timestamp": "charttime",
                 "timeoffsetunit": "abs",
@@ -182,7 +164,27 @@ class MIMICIV(EHR):
                 "mask_target": ["itemid"],
             },
         ]
-
+        if self.add_chart:
+            self.tables += [
+                {
+                    "fname": "icu/chartevents" + self.ext,
+                    "timestamp": "charttime",
+                    "timeoffsetunit": "abs",
+                    "include": [
+                        "hadm_id",
+                        "stay_id",
+                        "charttime",
+                        "itemid",
+                        "value",
+                        "valuenum",
+                        "valueuom",
+                    ],
+                    "code": ["itemid"],
+                    "desc": ["icu/d_items" + self.ext],
+                    "desc_key": ["label"],
+                    "mask_target": ["itemid"],
+                },
+            ]
         if (
             self.creatinine
             or self.bilirubin
@@ -533,6 +535,9 @@ class MIMICIV(EHR):
         icustays["ADMITTIME"] = pd.to_datetime(
             icustays["ADMITTIME"], infer_datetime_format=True, utc=True
         )
+
+        icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
+
         icustays["INTIME"] = (
             pd.to_datetime(icustays["INTIME"], infer_datetime_format=True, utc=True)
             - icustays["ADMITTIME"]

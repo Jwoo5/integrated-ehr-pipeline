@@ -104,6 +104,7 @@ class EHR(object):
         self.use_ed = cfg.use_ed
         self.lab_only = cfg.lab_only
         self.debug = cfg.debug
+        self.add_chart = cfg.add_chart
 
     @property
     def icustay_fname(self):
@@ -201,6 +202,7 @@ class EHR(object):
                 self.icustay_key,
                 self.patient_key,
                 "INTIME",
+                "INTIME_DATE",
                 "ADMITTIME",
                 "DEATHTIME",
                 "LOS",
@@ -297,47 +299,36 @@ class EHR(object):
 
             events = events.select(*includes)
             if table["timeoffsetunit"] == "abs":
-                events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
                 if self.icustay_key in events.columns:
                     events = events.drop(self.icustay_key)
                 # HADM Join -> duplicated by icy ids -> can process w.  intime
                 events = events.join(
                     cohorts.select(
-                        self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME", "LOS"
+                        self.hadm_key,
+                        self.icustay_key,
+                        "INTIME",
+                        "INTIME_DATE",
+                        "ADMITTIME",
+                        "LOS",
                     ),
                     on=self.hadm_key,
                     how="right",
                 )
-                events = events.withColumn(
-                    "TIME",
-                    F.round(
-                        (
-                            (
-                                F.col(timestamp_key).cast("long")
-                                - F.col("ADMITTIME").cast("long")
-                            )
-                            / 60
+                # To make as date + hours + minutes
+                for col in [timestamp_key, "endtime", "stoptime"]:
+                    if col in events.columns:
+                        events = events.withColumn(col, F.to_timestamp(col))
+                        new_name = "TIME" if col == timestamp_key else "ENDTIME"
+                        events = events.withColumn(
+                            new_name,
+                            F.expr(
+                                f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
+                            ),
                         )
-                    )
-                    - F.col("INTIME"),
-                )
-                if "endtime" in events.columns:
-                    events = events.withColumn(
-                        "endtime",
-                        F.round(
-                            (
-                                (
-                                    F.to_timestamp("endtime").cast("long")
-                                    - F.col("ADMITTIME").cast("long")
-                                )
-                                / 60
-                            )
-                        )
-                        - F.col("INTIME"),
-                    )
-                events = events.drop(timestamp_key)
+                events = events.drop("endtime", "stoptime")
 
             elif table["timeoffsetunit"] == "min":
+                raise NotImplementedError()
                 # First, make all timestamps as offset from hospital admission
                 events = events.join(
                     cohorts.select(self.hadm_key, self.icustay_key, "INTIME"),
@@ -365,15 +356,28 @@ class EHR(object):
 
             else:
                 raise NotImplementedError()
-            events = events.filter(F.col("TIME") >= 0)
-            events = events.filter(F.col("TIME") < F.col("LOS") * 60 * 24)  # Only
-            events = events.drop("LOS")
+            events = (
+                events.withColumn(
+                    "_TIME",
+                    (
+                        F.col(timestamp_key).cast("long")
+                        - F.col("ADMITTIME").cast("long")
+                    )
+                    / 60
+                    - F.col("INTIME"),
+                )
+                .filter(F.col("_TIME") >= 0)
+                .filter(F.col("_TIME") < F.col("LOS") * 60 * 24)
+            )  # Only within icu stay
 
-            events = events.dropDuplicates([self.icustay_key, "TIME"])
-
-            # events = events.filter(F.col("TIME") < self.pred_size * 60)
-
-            events = events.drop("INTIME", "ADMITTIME", self.hadm_key)
+            events = events.drop(
+                "LOS",
+                timestamp_key,
+                "INTIME",
+                "INTIME_DATE",
+                "ADMITTIME",
+                self.hadm_key,
+            )
 
             if code_to_descriptions:
                 for col in code_to_descriptions.keys():
@@ -394,7 +398,7 @@ class EHR(object):
                     # Should INITIALIZE with blank arrays to prevent corruption in Pyspark... Why??
                     text = table_name
                     for col, val in row.items():
-                        if col in [self.icustay_key, "TIME", "MASK_TARGET"]:
+                        if col in [self.icustay_key, "TIME", "_TIME", "MASK_TARGET"]:
                             continue
                         if val is None:
                             continue
@@ -407,7 +411,7 @@ class EHR(object):
             events = events.withColumn(
                 "TEXT",
                 process_row(table_name)(F.struct(*events.columns)),
-            ).select(self.icustay_key, "TIME", "TEXT", "MASK_TARGET")
+            ).select(self.icustay_key, "TIME", "_TIME", "TEXT", "MASK_TARGET")
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
 
@@ -415,7 +419,7 @@ class EHR(object):
         schema = StructType(
             [
                 StructField("stay_id", IntegerType(), True),
-                StructField("time", ArrayType(IntegerType()), True),
+                StructField("time", ArrayType(StringType()), True),
                 StructField("text", ArrayType(StringType()), True),
                 StructField("mask_target", ArrayType(StringType()), True),
             ]
@@ -424,7 +428,8 @@ class EHR(object):
         def _make_input(events):
             # Actually, this function does not have to return anything.
             # However, return something(TIME) is required to satisfy the PySpark requirements.
-            df = events.sort_values("TIME")
+            df = events.sort_values("_TIME")
+
             if len(df) <= self.min_event_size:
                 return pd.DataFrame(columns=["stay_id", "time", "text", "mask_target"])
             # Remove duplicated glucoses (in lab/chart)
@@ -457,12 +462,11 @@ class EHR(object):
         features = Features(
             {
                 "stay_id": Value(dtype="int32"),
-                "time": Sequence(feature=Value(dtype="int32")),
+                "time": Sequence(feature=Value(dtype="string")),
                 "text": Sequence(feature=Value(dtype="string")),
                 "mask_target": Sequence(feature=Value(dtype="string")),
             }
         )
-
         dset = Dataset.from_spark(events, features=features)
 
         processed_df = events.select("stay_id", "time").toPandas()
@@ -513,7 +517,7 @@ class EHR(object):
             stay_id = x[self.icustay_key]
             row = cohorts.loc[cohorts[self.icustay_key] == stay_id].iloc[0]
             for col in cohorts.columns:
-                if col in ["ADMITTIME", "time"]:
+                if col in ["ADMITTIME", "time", "INTIME_DATE"]:
                     continue
                 x[col] = row[col]
             return x
