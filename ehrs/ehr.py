@@ -103,6 +103,7 @@ class EHR(object):
 
         self.use_ed = cfg.use_ed
         self.lab_only = cfg.lab_only
+        self.debug = cfg.debug
 
     @property
     def icustay_fname(self):
@@ -247,7 +248,7 @@ class EHR(object):
             fname = table["fname"]
             table_name = fname.split("/")[-1][: -len(self.ext)]
             timestamp_key = table["timestamp"]
-            excludes = table["exclude"]
+            includes = table["include"]
             logger.info("{} in progress.".format(fname))
 
             code_to_descriptions = None
@@ -264,7 +265,9 @@ class EHR(object):
                 }
 
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
-            events = events.filter(F.col("itemid").isin(table["itemid"]))
+            if self.debug:
+                events = events.limit(100000)
+
             if table_name == "labevents":
                 events = events.filter(F.col("valuenum").isNotNull()).filter(
                     F.col("comments") != "___"
@@ -292,7 +295,7 @@ class EHR(object):
 
                 events = events.drop(self._ed_key, "intime", "outtime")
 
-            events = events.drop(*excludes)
+            events = events.select(*includes)
             if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
                 if self.icustay_key in events.columns:
@@ -379,10 +382,7 @@ class EHR(object):
                     )
                     events = events.withColumn(col, mapping_expr[F.col(col)])
 
-            # encoded_table_name = process_unit(table_name)
-            # encoded_cols = {
-            #     k: process_unit(k) for k in events.columns
-            # }
+            events = events.withColumn("MASK_TARGET", F.col(table["mask_target"][0]))
 
             def process_row(table_name):
                 def _process_row(row):
@@ -394,7 +394,7 @@ class EHR(object):
                     # Should INITIALIZE with blank arrays to prevent corruption in Pyspark... Why??
                     text = table_name
                     for col, val in row.items():
-                        if col in [self.icustay_key, "TIME"]:
+                        if col in [self.icustay_key, "TIME", "MASK_TARGET"]:
                             continue
                         if val is None:
                             continue
@@ -407,7 +407,7 @@ class EHR(object):
             events = events.withColumn(
                 "TEXT",
                 process_row(table_name)(F.struct(*events.columns)),
-            ).select(self.icustay_key, "TIME", "TEXT")
+            ).select(self.icustay_key, "TIME", "TEXT", "MASK_TARGET")
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
 
@@ -417,6 +417,7 @@ class EHR(object):
                 StructField("stay_id", IntegerType(), True),
                 StructField("time", ArrayType(IntegerType()), True),
                 StructField("text", ArrayType(StringType()), True),
+                StructField("mask_target", ArrayType(StringType()), True),
             ]
         )
 
@@ -425,7 +426,7 @@ class EHR(object):
             # However, return something(TIME) is required to satisfy the PySpark requirements.
             df = events.sort_values("TIME")
             if len(df) <= self.min_event_size:
-                return pd.DataFrame(columns=["stay_id", "time", "text"])
+                return pd.DataFrame(columns=["stay_id", "time", "text", "mask_target"])
             # Remove duplicated glucoses (in lab/chart)
             df["glucose_value"] = df["TEXT"].str.extract(
                 r"glucose.* (\d+)", flags=re.IGNORECASE, expand=False
@@ -444,6 +445,7 @@ class EHR(object):
                         "stay_id": int(df[self.icustay_key].values[0]),
                         "time": df["TIME"].values,
                         "text": df["TEXT"].values,
+                        "mask_target": df["MASK_TARGET"].values,
                     }
                 ]
             )
@@ -452,15 +454,14 @@ class EHR(object):
             cohorts = cohorts.toPandas()
         # Allow duplication
         events = events.groupBy(self.icustay_key).applyInPandas(_make_input, schema)
-
         features = Features(
             {
                 "stay_id": Value(dtype="int32"),
                 "time": Sequence(feature=Value(dtype="int32")),
                 "text": Sequence(feature=Value(dtype="string")),
+                "mask_target": Sequence(feature=Value(dtype="string")),
             }
         )
-        # Flush befor convert
 
         dset = Dataset.from_spark(events, features=features)
 

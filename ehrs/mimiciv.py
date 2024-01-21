@@ -66,96 +66,120 @@ class MIMICIV(EHR):
                 "fname": "hosp/labevents" + self.ext,
                 "timestamp": "charttime",
                 "timeoffsetunit": "abs",
-                "exclude": [
-                    "labevent_id",
-                    "storetime",
-                    "subject_id",
-                    "specimen_id",
-                    "value",  # Glucose have valuenum, no value,
-                    "ref_range_lower",
-                    "ref_range_upper",
-                    "flag",
-                    "priority",
-                    "comments",
+                "include": [
+                    "hadm_id",
+                    "itemid",
+                    "charttime",
+                    "value",
+                    "valuenum",
+                    "valueuom",
                 ],
                 "code": ["itemid"],
                 "desc": ["hosp/d_labitems" + self.ext],
                 "desc_key": ["label"],
-                "itemid": [50809, 50931, 52569],  # Glucose
+                "mask_target": ["itemid"],
             },
-            # in-icu insulin -> only in inputevents, insulins in pre are for non-icu
+            {
+                "fname": "hosp/microbiologyevents" + self.ext,
+                "timestamp": "charttime",
+                "timeoffsetunit": "abs",
+                "include": [
+                    "hadm_id",
+                    "charttime",
+                    "test_name",
+                    "org_name",
+                    "ab_name",
+                    "interpretation",
+                    "comments",
+                ],
+                "mask_target": ["test_name"],
+            },
+            {
+                "fname": "hosp/prescriptions" + self.ext,
+                "timestamp": "starttime",
+                "timeoffsetunit": "abs",
+                "include": [
+                    "hadm_id",
+                    "starttime",
+                    "stoptime",
+                    "drug",
+                    "prod_strength",
+                    "route",
+                ],
+                "mask_target": ["drug"],
+            },
             {
                 "fname": "icu/inputevents" + self.ext,
                 "timestamp": "starttime",
                 "timeoffsetunit": "abs",
-                "exclude": [
-                    "subject_id",
-                    "storetime",
-                    "orderid",
-                    "linkorderid",
-                    "ordercategoryname",
-                    "secondaryordercategoryname",
-                    "ordercomponenttypedescription",
-                    "ordercategorydescription",
-                    "patientweight",
-                    "totalamount",
-                    "totalamountuom",
-                    "isopenbag",
-                    "continueinnextdept",
-                    "statusdescription",
-                    "originalamount",
-                    "originalrate",
+                "include": [
+                    "hadm_id",
+                    "stay_id",
+                    "starttime",
+                    "endtime",
+                    "itemid",
+                    "amount",
+                    "amountuom",
                 ],
                 "code": ["itemid"],
                 "desc": ["icu/d_items" + self.ext],
                 "desc_key": ["label"],
-                "itemid": [  # Insulins
-                    223257,
-                    223258,
-                    223259,
-                    223260,
-                    223261,
-                    223262,
-                    229299,
-                    229619,
-                    220949,  # Dextrose
-                    220950,
-                    220951,
-                    220952,
-                    220963,
-                    220964,
-                    220965,
-                    220966,
-                    220967,
-                    220968,
-                    221000,
-                    221002,
-                    221014,
-                    221017,
-                    225947,
-                    228140,
-                    228141,
-                    228142,
-                ],
+                "mask_target": ["itemid"],
             },
             {
                 "fname": "icu/chartevents" + self.ext,
                 "timestamp": "charttime",
                 "timeoffsetunit": "abs",
-                "exclude": [
-                    "storetime",
-                    "subject_id",
+                "include": [
+                    "hadm_id",
+                    "stay_id",
+                    "charttime",
+                    "itemid",
                     "value",
-                    "warning",
+                    "valuenum",
+                    "valueuom",
                 ],
                 "code": ["itemid"],
                 "desc": ["icu/d_items" + self.ext],
                 "desc_key": ["label"],
-                "itemid": [
-                    220621,  # Glucose
-                    225664,
-                    226537,
+                "mask_target": ["itemid"],
+            },
+            {
+                "fname": "icu/outputevents" + self.ext,
+                "timestamp": "charttime",
+                "timeoffsetunit": "abs",
+                "include": [
+                    "hadm_id",
+                    "stay_id",
+                    "charttime",
+                    "itemid",
+                    "value",
+                    "valueuom",
                 ],
+                "code": ["itemid"],
+                "desc": ["icu/d_items" + self.ext],
+                "desc_key": ["label"],
+                "mask_target": ["itemid"],
+            },
+            {
+                "fname": "icu/procedureevents" + self.ext,
+                "timestamp": "starttime",
+                "timeoffsetunit": "abs",
+                "include": [
+                    "hadm_id",
+                    "stay_id",
+                    "starttime",
+                    "endtime",
+                    "itemid",
+                    "value",
+                    "valueuom",
+                    "location",
+                    "locationcategory",
+                ],
+                "code": ["itemid"],
+                "desc": ["icu/d_items" + self.ext],
+                "desc_key": ["label"],
+                "mask_target": ["itemid"],
             },
         ]
 
@@ -341,69 +365,6 @@ class MIMICIV(EHR):
                     "itemid": [50983],
                 },
             }
-
-        if cfg.use_more_tables:
-            self.tables += [
-                {
-                    "fname": "icu/chartevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "storetime",
-                        "subject_id",
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                },
-                {
-                    "fname": "icu/outputevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "storetime",
-                        "subject_id",
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                },
-                {
-                    "fname": "hosp/microbiologyevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "chartdate",
-                        "storetime",
-                        "storedate",
-                        "subject_id",
-                        "microevent_id",
-                        "micro_specimen_id",
-                        "spec_itemid",
-                        "test_itemid",
-                        "org_itemid",
-                        "ab_itemid",
-                    ],
-                },
-                {
-                    "fname": "icu/procedureevents" + self.ext,
-                    "timestamp": "starttime",
-                    "timeoffsetunit": "abs",
-                    "exclude": [
-                        "storetime",
-                        "endtime",
-                        "subject_id",
-                        "orderid",
-                        "linkorderid",
-                        "continueinnextdept",
-                        "statusdescription",
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                },
-            ]
-
         if cfg.use_ed:
             self._ed_fname = "ed/edstays" + self.ext
             self._ed_key = "stay_id"
@@ -792,13 +753,13 @@ class MIMICIV(EHR):
 
     def infer_data_extension(self) -> str:
         if (
-            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv.gz"))) == 21
-            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv.gz"))) == 8
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv.gz"))) == 22
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv.gz"))) == 9
         ):
             ext = ".csv.gz"
         elif (
-            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv"))) == 21
-            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv"))) == 8
+            len(glob.glob(os.path.join(self.data_dir, "hosp", "*.csv"))) == 22
+            or len(glob.glob(os.path.join(self.data_dir, "icu", "*.csv"))) == 9
         ):
             ext = ".csv"
         else:
