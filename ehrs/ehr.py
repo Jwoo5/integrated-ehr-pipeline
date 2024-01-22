@@ -270,10 +270,6 @@ class EHR(object):
             if self.debug:
                 events = events.limit(100000)
 
-            if table_name == "labevents":
-                events = events.filter(F.col("valuenum").isNotNull()).filter(
-                    F.col("comments") != "___"
-                )  # Mostly erronous values
             if self.icustay_key not in events.columns:
                 if self.hadm_key not in events.columns:
                     raise AssertionError(
@@ -318,15 +314,13 @@ class EHR(object):
                 for col in [timestamp_key, "endtime", "stoptime"]:
                     if col in events.columns:
                         events = events.withColumn(col, F.to_timestamp(col))
-                        new_name = "TIME" if col == timestamp_key else "ENDTIME"
+                        new_name = "TIME" if col == timestamp_key else col
                         events = events.withColumn(
                             new_name,
                             F.expr(
                                 f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
                             ),
                         )
-                events = events.drop("endtime", "stoptime")
-
             elif table["timeoffsetunit"] == "min":
                 raise NotImplementedError()
                 # First, make all timestamps as offset from hospital admission
