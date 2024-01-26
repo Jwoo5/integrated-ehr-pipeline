@@ -398,6 +398,11 @@ class EHR(object):
                             continue
                         # text += " " + col + " " + str(val)
                         text += " " + str(val)
+                    text = re.sub(
+                        r"\d*\.\d+",
+                        lambda x: str(round(float(x.group(0)), 4)),
+                        str(text),
+                    )
                     return text
 
                 return F.udf(_process_row, returnType=StringType())
