@@ -146,6 +146,11 @@ class EHR(object):
         return len(self.special_tokens_dict)
 
     def build_cohorts(self, icustays, cached=False):
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+
+        icustays = self.make_compatible(icustays)
+        self.icustays = icustays
+
         if cached:
             cohorts = self.load_from_cache(self.ehr_name + ".cohorts")
             if cohorts is not None:
@@ -684,6 +689,14 @@ class EHR(object):
         logger.info("Done encoding events.")
 
         return
+
+    def build_cohorts(self, cached=False):
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+
+        icustays = self.make_compatible(icustays)
+        self.icustays = icustays
+
+        return icustays
 
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)

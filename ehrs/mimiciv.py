@@ -107,13 +107,11 @@ class MIMICIV(EHR):
 
         if (
             self.creatinine
-            or self.bilirubin
             or self.platelets
             or self.wbc
             or self.hb
             or self.bicarbonate
             or self.sodium
-            or self.antibiotics
         ):
             self.task_itemids = {
                 "creatinine": {
@@ -392,22 +390,7 @@ class MIMICIV(EHR):
 
         self._determine_first_icu = "INTIME"
 
-    def build_cohorts(self, cached=False):
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
-
-        icustays = self.make_compatible(icustays)
-        self.icustays = icustays
-
-        cohorts = super().build_cohorts(icustays, cached=cached)
-
-        return cohorts
-
     def prepare_tasks(self, cohorts, spark, cached=False):
-        if cached:
-            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
-            if labeled_cohorts is not None:
-                return labeled_cohorts
-
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         if self.diagnosis:

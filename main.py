@@ -96,7 +96,10 @@ def get_parser():
         "--obs_size", type=int, default=48, help="Restrict cohorts (ex. los>obs_size)"
     )
     parser.add_argument(
-        "--pred_size", type=int, default=48, help="Prediction points from icu adm (ex. pred at pred_size)"
+        "--pred_size",
+        type=int,
+        default=48,
+        help="Prediction points from icu adm (ex. pred at pred_size)",
     )
 
     # tasks

@@ -261,22 +261,7 @@ class eICU(EHR):
 
         self._determine_first_icu = "unitvisitnumber"
 
-    def build_cohorts(self, cached=False):
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
-
-        icustays = self.make_compatible(icustays)
-        self.icustays = icustays
-
-        cohorts = super().build_cohorts(icustays, cached=cached)
-
-        return cohorts
-
     def prepare_tasks(self, cohorts, spark, cached=False):
-        if cohorts is None and cached:
-            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
-            if labeled_cohorts is not None:
-                return labeled_cohorts
-
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
 
         if self.diagnosis:
