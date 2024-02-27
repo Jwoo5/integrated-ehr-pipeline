@@ -193,7 +193,6 @@ class EHR(object):
 
         return icustays
 
-    # TODO process specific tasks according to user choice?
     def prepare_tasks(self, cohorts, spark, cached=False):
         if cached:
             labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
@@ -204,18 +203,21 @@ class EHR(object):
 
         logger.info("Start labeling cohorts for predictive tasks.")
 
-        labeled_cohorts = cohorts[
-            [
-                self.hadm_key,
-                self.icustay_key,
-                self.patient_key,
-                "INTIME",
-                "ADMITTIME",
-                "DEATHTIME",
-                "LOS",
-                "readmission",
-            ]
-        ].copy()
+        required_cols = [
+            self.icustay_key,
+            "INTIME",
+            "ADMITTIME",
+            "DEATHTIME",
+        ]
+        if self.readmission:
+            required_cols.append("readmission")
+        if self.los:
+            required_cols.append("LOS")
+        if self.hadm_key:
+            required_cols.append(self.hadm_key)
+        if self.patient_key:
+            required_cols.append(self.patient_key)
+        labeled_cohorts = cohorts[required_cols].copy()
 
         # los prediction
         if self.los:
@@ -351,12 +353,26 @@ class EHR(object):
                 events = events.withColumn("TIME", F.col("TIME") - F.col("INTIME"))
                 events = events.drop(timestamp_key)
 
+            elif table["timeoffsetunit"] == "ms":
+                events = events.join(
+                    cohorts.select(self.icustay_key, "INTIME"),
+                    on=self.icustay_key,
+                    how="right",
+                )
+                events = events.withColumn(
+                    "TIME",
+                    F.col(timestamp_key) / 1000 / 60 - F.col("INTIME"),
+                )
+                events = events.drop(timestamp_key)
+
             else:
                 raise NotImplementedError()
 
             events = events.filter(F.col("TIME") < self.pred_size * 60)
 
-            events = events.drop("INTIME", "ADMITTIME", self.hadm_key)
+            events = events.drop("INTIME", "ADMITTIME")
+            if self.hadm_key in events.columns:
+                events = events.drop(self.hadm_key)
 
             if code_to_descriptions:
                 for col in code_to_descriptions.keys():
