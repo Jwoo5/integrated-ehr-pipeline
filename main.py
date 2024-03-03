@@ -37,7 +37,7 @@ def get_parser():
         "--ehr",
         type=str,
         required=True,
-        choices=["mimiciii", "mimiciv", "eicu", "umcdb"],
+        choices=["mimiciii", "mimiciv", "eicu", "umcdb", "hirid"],
         help="name of the ehr system to be processed.",
     )
     parser.add_argument(

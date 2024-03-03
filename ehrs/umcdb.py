@@ -323,7 +323,7 @@ class UMCdb(EHR):
                     "post": 12,  # Non-Categorized/General"
                     "non": 12,  # Non-Categorized/General"
                 }
-                value = categories[value]  # 이거 return 이 int여야 함
+                value = categories[value]
 
                 return value
 
@@ -335,10 +335,13 @@ class UMCdb(EHR):
             )
 
             labeled_cohorts = labeled_cohorts.merge(
-                diagnoses, on=self.icustay_key, how="inner"
+                diagnoses, on=self.icustay_key, how="left"  # Use all
             )
+            labeled_cohorts["diagnosis"] = labeled_cohorts["diagnosis"].map(
+                lambda x: x if isinstance(x, list) else []
+            )
+
             logger.info("Done preparing diagnosis prediction for the given cohorts")
-            # ~20% removed due to no diagnosis
 
             self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
 
@@ -366,7 +369,7 @@ class UMCdb(EHR):
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
         return labeled_cohorts
 
-    def make_compatible(self, icustays):
+    def make_compatible(self, icustays, spark):
         # prepare icustays according to the appropriate format
         icustays["LOS"] = icustays["lengthofstay"].map(lambda x: x / 24)
         icustays["ADMITTIME"] = 0
@@ -396,15 +399,24 @@ class UMCdb(EHR):
         itemid = self.task_itemids[task]["itemid"]
 
         table = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
+        table = table.select(self.icustay_key, code, value, timestamp)
+        table.cache()
         table = table.filter(F.col(code).isin(itemid)).filter(F.col(value).isNotNull())
 
-        merge = cohorts.join(table, on=self.icustay_key, how="inner")
+        merge = table.join(
+            F.broadcast(cohorts.select(self.icustay_key, "ADMITTIME", "INTIME")),
+            on=self.icustay_key,
+            how="inner",
+        )
 
         if task == "creatinine":
             dialysis_tables = []
             for dialysis_dict in self.task_itemids["dialysis"]["tables"].values():
                 dialysis_table = spark.read.csv(
                     os.path.join(self.data_dir, dialysis_dict["fname"]), header=True
+                )
+                dialysis_table = dialysis_table.select(
+                    self.icustay_key, "itemid", dialysis_dict["timestamp"]
                 )
                 dialysis_table = dialysis_table.filter(
                     F.col("itemid").isin(dialysis_dict["itemid"])
@@ -436,6 +448,8 @@ class UMCdb(EHR):
         merge = merge.filter(F.col(timestamp) >= F.col("INTIME") + self.pred_size * 60)
         window = Window.partitionBy(self.icustay_key).orderBy(F.desc(timestamp))
 
+        merge.cache()
+
         for horizon in horizons:
             horizon_merge = merge.filter(
                 F.col(timestamp)
@@ -453,7 +467,6 @@ class UMCdb(EHR):
 
             task_name = task + "_" + str(horizon)
             # Labeling
-            # TODO: Check unit compatibalities. sth may diff
             if task == "platelets":
                 horizon_agg = horizon_agg.withColumn(
                     task_name,
@@ -529,10 +542,12 @@ class UMCdb(EHR):
                 )
 
             cohorts = cohorts.join(
-                horizon_agg.select(self.icustay_key, task_name),
+                F.broadcast(horizon_agg.select(self.icustay_key, task_name)),
                 on=self.icustay_key,
                 how="left",
             )
+            cohorts = cohorts.toPandas()
+            cohorts = spark.createDataFrame(cohorts)
 
         return cohorts
 

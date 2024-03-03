@@ -316,7 +316,7 @@ class eICU(EHR):
         logger.info(f"Finish Labeling for Task {clinical_task}")
         return labeled_cohorts
 
-    def make_compatible(self, icustays):
+    def make_compatible(self, icustays, spark):
         icustays.loc[:, "LOS"] = icustays["unitdischargeoffset"] / 60 / 24
         icustays.dropna(subset=["age"], inplace=True)
         icustays["AGE"] = icustays["age"].replace("> 89", 300).astype(int)

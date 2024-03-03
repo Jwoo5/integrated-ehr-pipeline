@@ -69,7 +69,9 @@ class MIMICIV(EHR):
                 "exclude": ["labevent_id", "storetime", "subject_id", "specimen_id"],
                 "code": ["itemid"],
                 "desc": ["hosp/d_labitems" + self.ext],
-                "desc_key": ["label"],
+                "desc_key": [["label"]],
+                "desc_code_col": ["itemid"],
+                "rename_map": [{"label": "itemid"}],
             },
             {
                 "fname": "hosp/prescriptions" + self.ext,
@@ -101,7 +103,9 @@ class MIMICIV(EHR):
                 ],
                 "code": ["itemid"],
                 "desc": ["icu/d_items" + self.ext],
-                "desc_key": ["label"],
+                "desc_key": [["label"]],
+                "desc_code_col": ["itemid"],
+                "rename_map": [{"label": "itemid"}],
             },
         ]
 
@@ -298,7 +302,9 @@ class MIMICIV(EHR):
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
+                    "desc_key": [["label"]],
+                    "desc_code_col": ["itemid"],
+                    "rename_map": [{"label": "itemid"}],
                 },
                 {
                     "fname": "icu/outputevents" + self.ext,
@@ -310,7 +316,9 @@ class MIMICIV(EHR):
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
+                    "desc_key": [["label"]],
+                    "desc_code_col": ["itemid"],
+                    "rename_map": [{"label": "itemid"}],
                 },
                 {
                     "fname": "hosp/microbiologyevents" + self.ext,
@@ -344,7 +352,9 @@ class MIMICIV(EHR):
                     ],
                     "code": ["itemid"],
                     "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
+                    "desc_key": [["label"]],
+                    "desc_code_col": ["itemid"],
+                    "rename_map": [{"label": "itemid"}],
                 },
             ]
 
@@ -453,7 +463,7 @@ class MIMICIV(EHR):
         self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
         return labeled_cohorts
 
-    def make_compatible(self, icustays):
+    def make_compatible(self, icustays, spark):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
         admissions = pd.read_csv(os.path.join(self.data_dir, self.admission_fname))
 

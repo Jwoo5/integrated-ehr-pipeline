@@ -145,24 +145,14 @@ class EHR(object):
     def num_special_tokens(self):
         return len(self.special_tokens_dict)
 
-    def build_cohorts(self, icustays, cached=False):
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
-
-        icustays = self.make_compatible(icustays)
-        self.icustays = icustays
-
+    def build_cohorts(self, spark, cached=False):
         if cached:
             cohorts = self.load_from_cache(self.ehr_name + ".cohorts")
             if cohorts is not None:
                 return cohorts
 
-        if not self.is_compatible(icustays):
-            raise AssertionError(
-                "{} do not have required columns to build cohorts.".format(
-                    self.icustay_fname
-                )
-                + " Please make sure that dataframe for icustays is compatible with other ehrs."
-            )
+        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
+        icustays = self.make_compatible(icustays, spark)
 
         logger.info("Start building cohorts for {}".format(self.ehr_name))
 
@@ -175,14 +165,15 @@ class EHR(object):
         # we define labels for the readmission task in this step
         # since it requires to observe each next icustays,
         # which would have been excluded in the final cohorts
-        icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
-
         if self.readmission:
+            icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
             icustays["readmission"] = 1
             icustays.loc[
                 icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
                 "readmission",
             ] = 0
+        else:
+            icustays.sort_values(self.icustay_key, inplace=True)
 
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(
@@ -268,10 +259,25 @@ class EHR(object):
                     k: pd.read_csv(os.path.join(self.data_dir, v))
                     for k, v in zip(table["code"], table["desc"])
                 }
+                if "desc_filter_col" in table:
+                    code_to_descriptions = {
+                        k: v[v[desc_filter_col] == desc_filter_val]
+                        for (k, v), desc_filter_col, desc_filter_val in zip(
+                            code_to_descriptions.items(),
+                            table["desc_filter_col"],
+                            table["desc_filter_val"],
+                        )
+                    }
+
                 code_to_descriptions = {
-                    k: dict(zip(v[k], v[d_k]))
-                    for (k, v), d_k in zip(
-                        code_to_descriptions.items(), table["desc_key"]
+                    k: {
+                        new_k: dict(zip(v[desc_code_col], v[new_k]))
+                        for new_k in desc_key
+                    }
+                    for (k, v), desc_key, desc_code_col in zip(
+                        code_to_descriptions.items(),
+                        table["desc_key"],
+                        table["desc_code_col"],
                     )
                 }
 
@@ -302,16 +308,23 @@ class EHR(object):
             events = events.drop(*excludes)
             if table["timeoffsetunit"] == "abs":
                 events = events.withColumn(timestamp_key, F.to_timestamp(timestamp_key))
-                if self.icustay_key in events.columns:
-                    events = events.drop(self.icustay_key)
                 # HADM Join -> duplicated by icy ids -> can process w.  intime
-                events = events.join(
-                    cohorts.select(
-                        self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME"
-                    ),
-                    on=self.hadm_key,
-                    how="right",
-                )
+                if self.hadm_key:
+                    if self.icustay_key in events.columns:
+                        events = events.drop(self.icustay_key)
+                    events = events.join(
+                        cohorts.select(
+                            self.hadm_key, self.icustay_key, "INTIME", "ADMITTIME"
+                        ),
+                        on=self.hadm_key,
+                        how="right",
+                    )
+                else:
+                    events = events.join(
+                        cohorts.select(self.icustay_key, "INTIME", "ADMITTIME"),
+                        on=self.icustay_key,
+                        how="right",
+                    )
                 events = events.withColumn(
                     "TIME",
                     F.round(
@@ -375,11 +388,19 @@ class EHR(object):
                 events = events.drop(self.hadm_key)
 
             if code_to_descriptions:
-                for col in code_to_descriptions.keys():
-                    mapping_expr = F.create_map(
-                        [F.lit(x) for x in chain(*code_to_descriptions[col].items())]
-                    )
-                    events = events.withColumn(col, mapping_expr[F.col(col)])
+                for (orig_col, mapping_dict), rename_map in zip(
+                    code_to_descriptions.items(), table["rename_map"]
+                ):
+                    for new_col, code_to_desc in mapping_dict.items():
+                        mapping_expr = F.create_map(
+                            [F.lit(x) for x in chain(*code_to_desc.items())]
+                        )
+                        events = events.withColumn(
+                            new_col, mapping_expr[F.col(orig_col)]
+                        )
+                    for k, v in rename_map.items():
+                        events = events.withColumn(v, F.col(k))
+                        events = events.drop(k)
 
             def process_unit(text, type_id):
                 # Given (table_name|col|val), generate ([inp], [type], [dpe])
@@ -616,22 +637,23 @@ class EHR(object):
         cohorts.reset_index(drop=True, inplace=True)
 
         # Should consider pat_id for split
+        shuffle_key = self.patient_key if self.patient_key else self.icustay_key
         for seed in self.seed:
             shuffled = (
-                cohorts.groupby(self.patient_key)[self.patient_key]
+                cohorts.groupby(shuffle_key)[shuffle_key]
                 .count()
                 .sample(frac=1, random_state=seed)
             )
             cum_len = shuffled.cumsum()
 
             cohorts.loc[
-                cohorts[self.patient_key].isin(
+                cohorts[shuffle_key].isin(
                     shuffled[cum_len < int(sum(shuffled) * self.valid_percent)].index
                 ),
                 f"split_{seed}",
             ] = "test"
             cohorts.loc[
-                cohorts[self.patient_key].isin(
+                cohorts[shuffle_key].isin(
                     shuffled[
                         (cum_len >= int(sum(shuffled) * self.valid_percent))
                         & (cum_len < int(sum(shuffled) * 2 * self.valid_percent))
@@ -640,7 +662,7 @@ class EHR(object):
                 f"split_{seed}",
             ] = "valid"
             cohorts.loc[
-                cohorts[self.patient_key].isin(
+                cohorts[shuffle_key].isin(
                     shuffled[
                         cum_len >= int(sum(shuffled) * 2 * self.valid_percent)
                     ].index
@@ -706,16 +728,8 @@ class EHR(object):
 
         return
 
-    def build_cohorts(self, cached=False):
-        icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
-
-        icustays = self.make_compatible(icustays)
-        self.icustays = icustays
-
-        return icustays
-
     def run_pipeline(self, spark) -> None:
-        cohorts = self.build_cohorts(cached=self.cache)
+        cohorts = self.build_cohorts(spark, cached=self.cache)
         labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
         events = self.process_tables(labeled_cohorts, spark)
         self.make_input(labeled_cohorts, events, spark)
@@ -750,29 +764,13 @@ class EHR(object):
             }
         )
 
-    def make_compatible(self, icustays):
+    def make_compatible(self, icustays, spark):
         """
         make different ehrs compatible with one another here
         NOTE: timestamps are converted to relative minutes from admittime
         but, maintain the admittime as the original value for later use
         """
         raise NotImplementedError()
-
-    def is_compatible(self, icustays):
-        checklist = [
-            self.hadm_key,
-            self.icustay_key,
-            self.patient_key,
-            "LOS",
-            "AGE",
-            "INTIME",
-            "ADMITTIME",
-            "DEATHTIME",
-        ]
-        for item in checklist:
-            if item not in icustays.columns.to_list():
-                return False
-        return True
 
     def save_to_cache(self, f, fname, use_pickle=False) -> None:
         if use_pickle:
