@@ -263,7 +263,8 @@ class eICU(EHR):
 
     def prepare_tasks(self, cohorts, spark, cached=False):
         labeled_cohorts = super().prepare_tasks(cohorts, spark, cached)
-
+        if cached:
+            return labeled_cohorts
         if self.diagnosis:
             logger.info("Start labeling cohorts for diagnosis prediction.")
 

@@ -26,8 +26,11 @@ python main.py --ehr eicu --data /home/data_storage/eicu-2.0/ --obs_size 48 --pr
 python main.py --ehr eicu --data /home/data_storage/eicu-2.0/ --obs_size 48 --pred_size 24 --max_patient_token_len 2147483647 --max_event_size 2147483647 --use_more_tables --dest /home/edlab/junukim/SNUB_UniHPF/ed/24h/ --num_threads 32 --readmission --diagnosis --min_event_size 0 --seed "2020, 2021, 2022, 2023, 2024"
 
 
-python main.py --ehr eicu --data /nfs_data_storage/AmsterdamUMCdb-v1.0.2/ --obs_size 48 --pred_size 48 --max_patient_token_len 2147483647 --max_event_size 2147483647 --use_more_tables --dest /home/edlab/junukim/SNUB_UniHPF/ed/24h/ --num_threads 32 --diagnosis --min_event_size 0 --seed "2020, 2021, 2022, 2023, 2024"
+python main.py --ehr eicu --data /nfs_data_storage/AmsterdamUMCdb-v1.0.2/ --obs_size 48 --pred_size 48 --max_patient_token_len 2147483647 --max_event_size 2147483647 --use_more_tables --dest /home/edlab/junukim/SNUB_UniHPF/ed/48h/ --num_threads 32 --diagnosis --min_event_size 0 --seed "2020, 2021, 2022, 2023, 2024"
 
 python main.py --ehr eicu --data /nfs_data_storage/AmsterdamUMCdb-v1.0.2/ --obs_size 48 --pred_size 24 --max_patient_token_len 2147483647 --max_event_size 2147483647 --use_more_tables --dest /home/edlab/junukim/SNUB_UniHPF/ed/24h/ --num_threads 32 --diagnosis --min_event_size 0 --seed "2020, 2021, 2022, 2023, 2024"
 
+python main.py --ehr hirid --data /nfs_data_storage/hirid/1.1.1/ --obs_size 48 --pred_size 48 --max_patient_token_len 2147483647 --max_event_size 2147483647 --use_more_tables --dest /home/edlab/junukim/SNUB_UniHPF/ed/48h/ --num_threads 32 --diagnosis --min_event_size 0 --seed 2020,2021,2022,2023,2024 
+
+python main.py --ehr hirid --data /nfs_data_storage/hirid/1.1.1/ --obs_size 48 --pred_size 24 --max_patient_token_len 2147483647 --max_event_size 2147483647 --use_more_tables --dest /home/edlab/junukim/SNUB_UniHPF/ed/24h/ --num_threads 32 --diagnosis --min_event_size 0 --seed 2020,2021,2022,2023,2024
 ```
