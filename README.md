@@ -3,8 +3,9 @@
 
 ## Install Requirements
 - NOTE: This repository requires `python>=3.9` and `Java>=8`
+- NOTE: Since there is a performance issue related to `transformers` library, it is recommended to use `transformers==4.29.1`.
 ```
-pip install numpy pandas tqdm treelib transformers pyspark
+pip install numpy pandas tqdm treelib transformers==4.29.1 pyspark
 ```
 ## How to Use
 ```
