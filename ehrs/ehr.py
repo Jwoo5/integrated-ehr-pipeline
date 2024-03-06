@@ -253,34 +253,6 @@ class EHR(object):
             excludes = table["exclude"]
             logger.info("{} in progress.".format(fname))
 
-            code_to_descriptions = None
-            if "code" in table:
-                code_to_descriptions = {
-                    k: pd.read_csv(os.path.join(self.data_dir, v))
-                    for k, v in zip(table["code"], table["desc"])
-                }
-                if "desc_filter_col" in table:
-                    code_to_descriptions = {
-                        k: v[v[desc_filter_col] == desc_filter_val]
-                        for (k, v), desc_filter_col, desc_filter_val in zip(
-                            code_to_descriptions.items(),
-                            table["desc_filter_col"],
-                            table["desc_filter_val"],
-                        )
-                    }
-
-                code_to_descriptions = {
-                    k: {
-                        new_k: dict(zip(v[desc_code_col], v[new_k]))
-                        for new_k in desc_key
-                    }
-                    for (k, v), desc_key, desc_code_col in zip(
-                        code_to_descriptions.items(),
-                        table["desc_key"],
-                        table["desc_code_col"],
-                    )
-                }
-
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
             if self.icustay_key not in events.columns:
                 if self.hadm_key not in events.columns:
@@ -387,20 +359,32 @@ class EHR(object):
             if self.hadm_key in events.columns:
                 events = events.drop(self.hadm_key)
 
-            if code_to_descriptions:
-                for (orig_col, mapping_dict), rename_map in zip(
-                    code_to_descriptions.items(), table["rename_map"]
-                ):
-                    for new_col, code_to_desc in mapping_dict.items():
-                        mapping_expr = F.create_map(
-                            [F.lit(x) for x in chain(*code_to_desc.items())]
+            if "code" in table:
+                for code_idx in range(len(table["code"])):
+                    code = table["code"][code_idx]
+                    desc = table["desc"][code_idx]
+
+                    mapping_table = spark.read.csv(
+                        os.path.join(self.data_dir, desc), header=True
+                    )
+                    if "desc_filter_col" in table:
+                        mapping_table = mapping_table.filter(
+                            F.col(table["desc_filter_col"][code_idx])
+                            == table["desc_filter_val"][code_idx]
                         )
-                        events = events.withColumn(
-                            new_col, mapping_expr[F.col(orig_col)]
-                        )
-                    for k, v in rename_map.items():
-                        events = events.withColumn(v, F.col(k))
-                        events = events.drop(k)
+                    mapping_table = mapping_table.withColumnRenamed(
+                        table["desc_code_col"][code_idx], code
+                    )
+                    mapping_table = mapping_table.select(
+                        code, *table["desc_key"][code_idx]
+                    )
+
+                    events = events.join(
+                        F.broadcast(mapping_table), on=code, how="left"
+                    )
+                    events = events.drop(code)
+                    for k, v in table["rename_map"][code_idx].items():
+                        events = events.withColumnRenamed(k, v)
 
             def process_unit(text, type_id):
                 # Given (table_name|col|val), generate ([inp], [type], [dpe])
