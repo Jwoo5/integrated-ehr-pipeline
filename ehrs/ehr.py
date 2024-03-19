@@ -248,7 +248,7 @@ class EHR(object):
         events_dfs = []
         for table in self.tables:
             fname = table["fname"]
-            table_name = fname.split("/")[-1][: -len(self.ext)]
+            table_name = fname.split(self.ext)[0].split("/")[-1]
             timestamp_key = table["timestamp"]
             excludes = table["exclude"]
             logger.info("{} in progress.".format(fname))

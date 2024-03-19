@@ -205,16 +205,17 @@ class HIRID(EHR):
         if self.diagnosis:
             logger.info("Start labeling cohorts for diagnosis prediction.")
 
-            diagnoses = pd.read_csv(
+            diagnoses = spark.read.csv(
                 os.path.join(self.data_dir, self._diagnosis_fname), header=True
+            ).select("variableid", "value", self.icustay_key)
+            diagnoses = diagnoses.filter(
+                diagnoses["variableid"].isin([9990002, 9990004])
             )
-            diagnoses = diagnoses[["variableid", "value", self.icustay_key]]
-            diagnoses = diagnoses[diagnoses["variableid"].isin([9990002, 9990004])]
-
-            # diagnoses["variableid"] = diagnoses["variableid"].astype(int)
+            diagnoses = diagnoses.withColumn(
+                "value", F.col("value").cast("float").cast("int")
+            ).withColumn(self.icustay_key, F.col(self.icustay_key).cast("int"))
+            diagnoses = diagnoses.toPandas()
             # # 9990002: APACHE 2, 9990004: APACHE 4, each has non-overlapping value range
-            # diagnoses = diagnoses[diagnoses["variableid"].isin([9990002, 9990004])]
-            diagnoses["value"] = diagnoses["value"].astype(float).astype(int)
 
             def get_diagnosis_category(x):
                 return {
