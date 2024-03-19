@@ -204,7 +204,7 @@ class HIRID(EHR):
 
         if self.diagnosis:
             logger.info("Start labeling cohorts for diagnosis prediction.")
-
+            breakpoint()
             diagnoses = pd.read_csv(
                 os.path.join(self.data_dir, self._diagnosis_fname), header=True
             )

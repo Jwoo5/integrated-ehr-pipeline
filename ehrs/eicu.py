@@ -2,7 +2,7 @@ import glob
 import logging
 import os
 from collections import Counter
-
+import csv
 import numpy as np
 import pandas as pd
 import pyspark.sql.functions as F
@@ -338,7 +338,15 @@ class eICU(EHR):
     def make_dx_mapping(self):
         diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
         ccs_dx = pd.read_csv(self.ccs_path)
-        gem = pd.read_csv(self.gem_path)
+        gem = pd.read_csv(self.gem_path, quotechar='"', quoting=csv.QUOTE_NONE, on_bad_lines='skip')
+
+        # ADD : 모든 문자열 컬럼에 대해 양쪽 끝의 따옴표 제거
+        gem.columns = [col.strip('"') for col in gem.columns]
+
+        # 데이터프레임의 값에서도 따옴표 제거
+        for col in gem.columns:
+            if gem[col].dtype == object:
+                gem[col] = gem[col].str.strip('"')
 
         diagnosis = diagnosis[["diagnosisstring", "icd9code"]]
 

@@ -1,7 +1,7 @@
 import glob
 import logging
 import os
-
+import csv
 import numpy as np
 import pandas as pd
 import pyspark.sql.functions as F
@@ -484,7 +484,7 @@ class MIMICIV(EHR):
         )
 
         icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
-        icustays.loc[:, "INTIME"] = pd.to_datetime(
+        icustays["INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True, utc=True
         )
 
@@ -522,7 +522,17 @@ class MIMICIV(EHR):
         return icustays
 
     def icd10toicd9(self, dx):
-        gem = pd.read_csv(self.gem_path)
+        #gem = pd.read_csv(self.gem_path)
+        gem = pd.read_csv(self.gem_path, quotechar='"', quoting=csv.QUOTE_NONE, on_bad_lines='skip')
+
+        # ADD : 모든 문자열 컬럼에 대해 양쪽 끝의 따옴표 제거
+        gem.columns = [col.strip('"') for col in gem.columns]
+
+        # 데이터프레임의 값에서도 따옴표 제거
+        for col in gem.columns:
+            if gem[col].dtype == object:
+                gem[col] = gem[col].str.strip('"')
+                
         dx_icd_10 = dx[dx["icd_version"] == 10]["icd_code"]
 
         unique_elem_no_map = set(dx_icd_10) - set(gem["icd10cm"])
