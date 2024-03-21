@@ -67,18 +67,6 @@ class EHR(object):
         self.obs_size = cfg.obs_size
         self.pred_size = cfg.pred_size
 
-        # tasks
-        self.mortality = cfg.mortality
-        self.los = cfg.los
-        self.readmission = cfg.readmission
-        self.diagnosis = cfg.diagnosis
-        self.creatinine = cfg.creatinine
-        self.platelets = cfg.platelets
-        self.wbc = cfg.wbc
-        self.hb = cfg.hb
-        self.bicarbonate = cfg.bicarbonate
-        self.sodium = cfg.sodium
-
         self.dest = cfg.dest
         self.valid_percent = cfg.valid_percent
         self.seed = [int(s) for s in cfg.seed.replace(" ", "").split(",")]
@@ -101,7 +89,6 @@ class EHR(object):
         self._icustay_key = None
         self._hadm_key = None
 
-        self.use_ed = cfg.use_ed
         self.lab_only = cfg.lab_only
         self.debug = cfg.debug
         self.add_chart = cfg.add_chart
@@ -121,6 +108,10 @@ class EHR(object):
     @property
     def diagnosis_fname(self):
         return self._diagnosis_fname
+
+    @property
+    def d_diagnosis_fname(self):
+        return self._d_diagnosis_fname
 
     @property
     def icustay_key(self):
@@ -169,13 +160,6 @@ class EHR(object):
         # which would have been excluded in the final cohorts
         icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
 
-        if self.readmission:
-            icustays["readmission"] = 1
-            icustays.loc[
-                icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
-                "readmission",
-            ] = 0
-
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(
                 len(icustays)
@@ -184,49 +168,6 @@ class EHR(object):
         self.save_to_cache(icustays, self.ehr_name + ".cohorts")
 
         return icustays
-
-    # TODO process specific tasks according to user choice?
-    def prepare_tasks(self, cohorts, spark, cached=False):
-        if cached:
-            labeled_cohorts = self.load_from_cache(self.ehr_name + ".cohorts.labeled")
-            if labeled_cohorts is not None:
-                return labeled_cohorts
-            else:
-                raise RuntimeError()
-
-        logger.info("Start labeling cohorts for predictive tasks.")
-
-        labeled_cohorts = cohorts[
-            [
-                self.hadm_key,
-                self.icustay_key,
-                self.patient_key,
-                "INTIME",
-                "INTIME_DATE",
-                "ADMITTIME",
-                "DEATHTIME",
-                "LOS",
-                # "readmission",
-            ]
-        ].copy()
-
-        # los prediction
-        if self.los:
-            for i in self.los:
-                labeled_cohorts["los_{}".format(i)] = (cohorts["LOS"] > i).astype(int)
-
-        if self.mortality:
-            for i in self.mortality:
-                labeled_cohorts["mortality_{}".format(i)] = (
-                    cohorts["DEATHTIME"] - cohorts["INTIME"]
-                    < self.pred_size * 60 + i * 60 * 24
-                ).astype(int)
-
-        self.save_to_cache(labeled_cohorts, self.ehr_name + ".cohorts.labeled")
-
-        logger.info("Done preparing tasks except for diagnosis prediction.")
-
-        return labeled_cohorts
 
     def process_tables(self, cohorts, spark):
         # in: cohorts, sparksession
@@ -239,11 +180,6 @@ class EHR(object):
             print("Converted Cohort to Pyspark DataFrame")
         else:
             logger.info("Start Preprocessing Tables")
-
-        if self.use_ed:
-            ed = spark.read.csv(
-                os.path.join(self.data_dir, self._ed_fname), header=True
-            ).select(self.hadm_key, self._ed_key, "intime", "outtime")
 
         events_dfs = []
         for table in self.tables:
@@ -321,33 +257,6 @@ class EHR(object):
                                 f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
                             ),
                         )
-            elif table["timeoffsetunit"] == "min":
-                raise NotImplementedError()
-                # First, make all timestamps as offset from hospital admission
-                events = events.join(
-                    cohorts.select(self.hadm_key, self.icustay_key, "INTIME"),
-                    on=self.icustay_key,
-                    how="right",
-                )
-                events = events.withColumn(
-                    "TIME", F.col(timestamp_key).cast("int") + F.col("INTIME")
-                )
-                # Second, duplicate events to handle multiple icustays
-                events = events.drop(self.icustay_key, "INTIME")
-                events = events.join(
-                    cohorts.select(self.hadm_key, self.icustay_key),
-                    on=self.hadm_key,
-                    how="right",
-                )
-                events = events.join(
-                    cohorts.select(self.icustay_key, "INTIME", "ADMITTIME", "LOS"),
-                    on=self.icustay_key,
-                    how="right",
-                )
-                # Third, make all timestamps as offset from icu admission
-                events = events.withColumn("TIME", F.col("TIME") - F.col("INTIME"))
-                events = events.drop(timestamp_key)
-
             else:
                 raise NotImplementedError()
             events = (
@@ -511,17 +420,27 @@ class EHR(object):
                 f"split_{seed}",
             ] = "train"
 
-        def mapper(x):
+        def mapper(x, cohorts):
             # Add metadata of each patient
-            stay_id = x[self.icustay_key]
-            row = cohorts.loc[cohorts[self.icustay_key] == stay_id].iloc[0]
-            for col in cohorts.columns:
-                if col in ["ADMITTIME", "time", "INTIME_DATE"]:
-                    continue
-                x[col] = row[col]
+            samples = []
+            for values in zip(*x.values()):
+                sample = {k: v for k, v in zip(x.keys(), values)}
+                stay_id = sample[self.icustay_key]
+                row = cohorts.loc[stay_id]
+                for col in cohorts.columns:
+                    if col in ["ADMITTIME", "time", "INTIME_DATE", "dod"]:
+                        continue
+                    sample[col] = row[col]
+                samples.append(sample)
+            x = {
+                k: list(v)
+                for k, v in zip(samples[0].keys(), zip(*[i.values() for i in samples]))
+            }
             return x
 
-        dset = dset.map(mapper, num_proc=self.cfg.num_threads)
+        _cohorts = cohorts.set_index(self.icustay_key, drop=True)
+
+        dset = dset.map(mapper, batched=True, fn_kwargs={"cohorts": _cohorts})
         dset.save_to_disk(os.path.join(self.dest, self.ehr_name))
 
         cohorts.to_csv(
@@ -534,9 +453,8 @@ class EHR(object):
 
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
-        labeled_cohorts = self.prepare_tasks(cohorts, spark, cached=self.cache)
-        events = self.process_tables(labeled_cohorts, spark)
-        self.make_input(labeled_cohorts, events, spark)
+        events = self.process_tables(cohorts, spark)
+        self.make_input(cohorts, events, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):

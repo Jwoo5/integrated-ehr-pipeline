@@ -37,7 +37,7 @@ def get_parser():
         "--ehr",
         type=str,
         required=True,
-        choices=["mimiciii", "mimiciv", "eicu"],
+        choices=["mimiciv"],
         help="name of the ehr system to be processed.",
     )
     parser.add_argument(
@@ -102,66 +102,6 @@ def get_parser():
         help="Prediction points from icu adm (ex. pred at pred_size)",
     )
 
-    # tasks
-    parser.add_argument(
-        "--mortality",
-        nargs="+",
-        default=[1, 2, 3, 7, 14],
-        help="whether to include n-day mortality tasks or not",
-    )
-    parser.add_argument(
-        "--los",
-        nargs="+",
-        default=[7, 14],
-        help="whether to include n-day los tasks or not",
-    )
-    parser.add_argument(
-        "--readmission",
-        action="store_true",
-        help="whether to include readmission task or not",
-    )
-    parser.add_argument(
-        "--diagnosis",
-        action="store_true",
-        help="whether to include diagnosis task or not",
-    )
-    parser.add_argument(
-        "--creatinine",
-        nargs="+",
-        default=[1, 2, 3],
-        help="whether to include n-day creatinine tasks or not",
-    )
-    parser.add_argument(
-        "--platelets",
-        nargs="+",
-        default=[1, 2, 3],
-        help="whether to include n-day platelets tasks or not",
-    )
-    parser.add_argument(
-        "--wbc",
-        nargs="+",
-        default=[1, 2, 3],
-        help="whether to include n-day wbc tasks or not",
-    )
-    parser.add_argument(
-        "--hb",
-        nargs="+",
-        default=[1, 2, 3],
-        help="whether to include n-day hb tasks or not",
-    )
-    parser.add_argument(
-        "--bicarbonate",
-        nargs="+",
-        default=[1, 2, 3],
-        help="whether to include n-day bicarbonate tasks or not",
-    )
-    parser.add_argument(
-        "--sodium",
-        nargs="+",
-        default=[1, 2, 3],
-        help="whether to include n-day sodium tasks or not",
-    )
-
     parser.add_argument(
         "--max_event_token_len",
         type=int,
@@ -174,12 +114,6 @@ def get_parser():
         type=int,
         default=8192,
         help="max token length for each patient (Flatten)",
-    )
-
-    parser.add_argument(
-        "--use_ed",
-        action="store_true",
-        help="Use ED data, Only supported for MIMIC-IV",
     )
 
     parser.add_argument(
