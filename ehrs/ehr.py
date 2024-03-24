@@ -214,21 +214,6 @@ class EHR(object):
                         )
                     )
 
-            if "ed/" in fname and table["timeoffsetunit"] == "abs":
-                # join ed table & set as hadm_id & drop ed key
-                # Since unit is abs -> do not need to additionally process time
-                events = events.join(
-                    F.broadcast(ed),
-                    on=self._ed_key,
-                    how="left",
-                )
-                if table["timestamp"] == "ED_INTIME":
-                    events = events.withColumnRenamed("intime", "ED_INTIME")
-                elif table["timestamp"] == "ED_OUTTIME":
-                    events = events.withColumnRenamed("outtime", "ED_OUTTIME")
-
-                events = events.drop(self._ed_key, "intime", "outtime")
-
             events = events.select(*includes)
             if table["timeoffsetunit"] == "abs":
                 if self.icustay_key in events.columns:
@@ -320,6 +305,9 @@ class EHR(object):
                 "TEXT",
                 process_row(table_name)(F.struct(*events.columns)),
             ).select(self.icustay_key, "TIME", "_TIME", "TEXT", "MASK_TARGET")
+
+            events = events.withColumn("TABLE_NAME", F.lit(table_name))
+
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
 
@@ -329,6 +317,7 @@ class EHR(object):
                 StructField("stay_id", IntegerType(), True),
                 StructField("time", ArrayType(StringType()), True),
                 StructField("text", ArrayType(StringType()), True),
+                StructField("table_name", ArrayType(StringType()), True),
                 StructField("mask_target", ArrayType(StringType()), True),
             ]
         )
@@ -339,7 +328,9 @@ class EHR(object):
             df = events.sort_values("_TIME")
 
             if len(df) <= self.min_event_size:
-                return pd.DataFrame(columns=["stay_id", "time", "text", "mask_target"])
+                return pd.DataFrame(
+                    columns=["stay_id", "time", "text", "table_name", "mask_target"]
+                )
             # Remove duplicated glucoses (in lab/chart)
             df["glucose_value"] = df["TEXT"].str.extract(
                 r"glucose.* (\d+)", flags=re.IGNORECASE, expand=False
@@ -358,6 +349,7 @@ class EHR(object):
                         "stay_id": int(df[self.icustay_key].values[0]),
                         "time": df["TIME"].values,
                         "text": df["TEXT"].values,
+                        "table_name": df["TABLE_NAME"].values,
                         "mask_target": df["MASK_TARGET"].values,
                     }
                 ]
@@ -372,6 +364,7 @@ class EHR(object):
                 "stay_id": Value(dtype="int32"),
                 "time": Sequence(feature=Value(dtype="string")),
                 "text": Sequence(feature=Value(dtype="string")),
+                "table_name": Sequence(feature=Value(dtype="string")),
                 "mask_target": Sequence(feature=Value(dtype="string")),
             }
         )
