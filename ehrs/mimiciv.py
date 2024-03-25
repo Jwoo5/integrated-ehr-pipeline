@@ -2,13 +2,9 @@ import glob
 import logging
 import os
 
-import numpy as np
 import pandas as pd
-import pyspark.sql.functions as F
-import pyspark.sql.types as T
-from pyspark.sql.window import Window
 
-from ehrs import EHR, register_ehr
+from ehrs import EHR, Table, register_ehr
 
 logger = logging.getLogger(__name__)
 
@@ -62,129 +58,103 @@ class MIMICIV(EHR):
         self._diagnosis_fname = "hosp/diagnoses_icd" + self.ext
         self._d_diagnosis_fname = "hosp/d_icd_diagnoses" + self.ext
 
+        labevents = Table(
+            fname="hosp/labevents" + self.ext,
+            timestamp="charttime",
+            endtime=None,
+            itemid="itemid",
+            value=["value", "valuenum"],
+            uom="valueuom",
+            text=None,
+            code="itemid",
+            desc="hosp/d_labitems" + self.ext,
+            desc_key="label",
+        )
+
+        microbiologyevents = Table(
+            fname="hosp/microbiologyevents" + self.ext,
+            timestamp="charttime",
+            endtime=None,
+            itemid=None,
+            value=None,
+            uom=None,
+            text=["test_name", "org_name", "ab_name", "interpretation", "comments"],
+            code=None,
+            desc=None,
+            desc_key=None,
+        )
+        prescriptions = Table(
+            fname="hosp/prescriptions" + self.ext,
+            timestamp="starttime",
+            endtime="stoptime",
+            itemid="drug",
+            value=["prod_strength"],
+            uom=None,
+            text=["route"],
+            code=None,
+            desc=None,
+            desc_key=None,
+        )
+        inputevents = Table(
+            fname="icu/inputevents" + self.ext,
+            timestamp="starttime",
+            endtime="endtime",
+            itemid="itemid",
+            value=["amount"],
+            uom="amountuom",
+            text=None,
+            code="itemid",
+            desc="icu/d_items" + self.ext,
+            desc_key="label",
+        )
+        outputevents = Table(
+            fname="icu/outputevents" + self.ext,
+            timestamp="charttime",
+            endtime=None,
+            itemid="itemid",
+            value=["value"],
+            uom="valueuom",
+            text=None,
+            code="itemid",
+            desc="icu/d_items" + self.ext,
+            desc_key="label",
+        )
+        procedureevents = Table(
+            fname="icu/procedureevents" + self.ext,
+            timestamp="starttime",
+            endtime="endtime",
+            itemid="itemid",
+            value=["value"],
+            uom="valueuom",
+            text=["location", "locationcategory"],
+            code="itemid",
+            desc="icu/d_items" + self.ext,
+            desc_key="label",
+        )
+
         self.tables = [
-            {
-                "fname": "hosp/labevents" + self.ext,
-                "timestamp": "charttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "itemid",
-                    "charttime",
-                    "value",
-                    "valuenum",
-                    "valueuom",
-                ],
-                "code": ["itemid"],
-                "desc": ["hosp/d_labitems" + self.ext],
-                "desc_key": ["label"],
-                "mask_target": ["itemid"],
-            },
-            {
-                "fname": "hosp/microbiologyevents" + self.ext,
-                "timestamp": "charttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "charttime",
-                    "test_name",
-                    "org_name",
-                    "ab_name",
-                    "interpretation",
-                    "comments",
-                ],
-                "mask_target": ["test_name"],
-            },
-            {
-                "fname": "hosp/prescriptions" + self.ext,
-                "timestamp": "starttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "starttime",
-                    "stoptime",
-                    "drug",
-                    "prod_strength",
-                    "route",
-                ],
-                "mask_target": ["drug"],
-            },
-            {
-                "fname": "icu/inputevents" + self.ext,
-                "timestamp": "starttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "stay_id",
-                    "starttime",
-                    "endtime",
-                    "itemid",
-                    "amount",
-                    "amountuom",
-                ],
-                "code": ["itemid"],
-                "desc": ["icu/d_items" + self.ext],
-                "desc_key": ["label"],
-                "mask_target": ["itemid"],
-            },
-            {
-                "fname": "icu/outputevents" + self.ext,
-                "timestamp": "charttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "stay_id",
-                    "charttime",
-                    "itemid",
-                    "value",
-                    "valueuom",
-                ],
-                "code": ["itemid"],
-                "desc": ["icu/d_items" + self.ext],
-                "desc_key": ["label"],
-                "mask_target": ["itemid"],
-            },
-            {
-                "fname": "icu/procedureevents" + self.ext,
-                "timestamp": "starttime",
-                "timeoffsetunit": "abs",
-                "include": [
-                    "hadm_id",
-                    "stay_id",
-                    "starttime",
-                    "endtime",
-                    "itemid",
-                    "value",
-                    "valueuom",
-                    "location",
-                    "locationcategory",
-                ],
-                "code": ["itemid"],
-                "desc": ["icu/d_items" + self.ext],
-                "desc_key": ["label"],
-                "mask_target": ["itemid"],
-            },
+            labevents,
+            microbiologyevents,
+            prescriptions,
+            inputevents,
+            outputevents,
+            procedureevents,
         ]
+
         if self.add_chart:
             self.tables += [
-                {
-                    "fname": "icu/chartevents" + self.ext,
-                    "timestamp": "charttime",
-                    "timeoffsetunit": "abs",
-                    "include": [
-                        "hadm_id",
-                        "stay_id",
-                        "charttime",
-                        "itemid",
-                        "value",
-                        "valuenum",
-                        "valueuom",
-                    ],
-                    "code": ["itemid"],
-                    "desc": ["icu/d_items" + self.ext],
-                    "desc_key": ["label"],
-                    "mask_target": ["itemid"],
-                },
+                Table(
+                    fname="icu/chartevents" + self.ext,
+                    timestamp="charttime",
+                    endtime=None,
+                    itemid="itemid",
+                    value=["value", "valuenum"],
+                    uom="valueuom",
+                    text=None,
+                    code="itemid",
+                    desc="icu/d_items" + self.ext,
+                    desc_key="label",
+                )
             ]
 
         if self.lab_only:
@@ -193,8 +163,6 @@ class MIMICIV(EHR):
         self._icustay_key = "stay_id"
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
-
-        self._determine_first_icu = "INTIME"
 
     def build_cohorts(self, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
@@ -272,6 +240,16 @@ class MIMICIV(EHR):
             pd.to_datetime(icustays["DEATHTIME"], infer_datetime_format=True, utc=True)
             - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
+
+        icustays = icustays.drop(
+            columns=[
+                "first_careunit",
+                "last_careunit",
+                "anchor_age",
+                "anchor_year",
+                "anchor_year_group",
+            ]
+        )
 
         return icustays
 

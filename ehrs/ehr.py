@@ -4,9 +4,10 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
-from typing import List, Union
+from typing import List, Optional, Union
 
 import pandas as pd
 import pyspark.sql.functions as F
@@ -18,9 +19,24 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
+from pyspark.sql.window import Window
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Table:
+    fname: str
+    timestamp: str
+    endtime: Optional[str] = None
+    itemid: Optional[str] = None
+    value: Optional[List[str]] = None
+    uom: Optional[str] = None
+    text: Optional[List[str]] = None
+    code: Optional[str] = None
+    desc: Optional[str] = None
+    desc_key: Optional[str] = None
 
 
 class EHR(object):
@@ -126,10 +142,6 @@ class EHR(object):
         return self._patient_key
 
     @property
-    def determine_first_icu(self):
-        return self._determine_first_icu
-
-    @property
     def num_special_tokens(self):
         return len(self.special_tokens_dict)
 
@@ -183,43 +195,37 @@ class EHR(object):
 
         events_dfs = []
         for table in self.tables:
-            fname = table["fname"]
+            fname = table.fname
             table_name = fname.split("/")[-1][: -len(self.ext)]
-            timestamp_key = table["timestamp"]
-            includes = table["include"]
+            table.timestamp = table.timestamp
             logger.info("{} in progress.".format(fname))
 
             code_to_descriptions = None
-            if "code" in table:
+            if table.code:
+                desc_df = pd.read_csv(os.path.join(self.data_dir, table.desc))
                 code_to_descriptions = {
-                    k: pd.read_csv(os.path.join(self.data_dir, v))
-                    for k, v in zip(table["code"], table["desc"])
-                }
-                code_to_descriptions = {
-                    k: dict(zip(v[k], v[d_k]))
-                    for (k, v), d_k in zip(
-                        code_to_descriptions.items(), table["desc_key"]
-                    )
+                    table.code: dict(zip(desc_df[table.code], desc_df[table.desc_key]))
                 }
 
             events = spark.read.csv(os.path.join(self.data_dir, fname), header=True)
             if self.debug:
                 events = events.limit(100000)
 
-            if self.icustay_key not in events.columns:
-                if self.hadm_key not in events.columns:
-                    raise AssertionError(
-                        "{} doesn't have one of these columns: {}".format(
-                            fname, [self.icustay_key, self.hadm_key]
-                        )
+            if (
+                self.icustay_key not in events.columns
+                and self.hadm_key not in events.columns
+            ):
+                raise AssertionError(
+                    "{} doesn't have one of these columns: {}".format(
+                        fname, [self.icustay_key, self.hadm_key]
                     )
+                )
 
-            events = events.select(*includes)
-            if table["timeoffsetunit"] == "abs":
-                if self.icustay_key in events.columns:
-                    events = events.drop(self.icustay_key)
-                # HADM Join -> duplicated by icy ids -> can process w.  intime
-                events = events.join(
+            if self.icustay_key in events.columns:
+                events = events.drop(self.icustay_key)
+            # HADM Join -> duplicated by icy ids -> can process w.  intime
+            events = events.join(
+                F.broadcast(
                     cohorts.select(
                         self.hadm_key,
                         self.icustay_key,
@@ -227,28 +233,28 @@ class EHR(object):
                         "INTIME_DATE",
                         "ADMITTIME",
                         "LOS",
-                    ),
-                    on=self.hadm_key,
-                    how="right",
-                )
-                # To make as date + hours + minutes
-                for col in [timestamp_key, "endtime", "stoptime"]:
-                    if col in events.columns:
-                        events = events.withColumn(col, F.to_timestamp(col))
-                        new_name = "TIME" if col == timestamp_key else col
-                        events = events.withColumn(
-                            new_name,
-                            F.expr(
-                                f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
-                            ),
-                        )
-            else:
-                raise NotImplementedError()
+                    )
+                ),
+                on=self.hadm_key,
+                how="right",
+            )
+            # To make as date + hours + minutes
+            for col in [table.timestamp, "endtime", "stoptime"]:
+                if col in events.columns:
+                    events = events.withColumn(col, F.to_timestamp(col))
+                    new_name = "TIME" if col == table.timestamp else col
+                    events = events.withColumn(
+                        new_name,
+                        F.expr(
+                            f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
+                        ),
+                    )
+
             events = (
                 events.withColumn(
                     "_TIME",
                     (
-                        F.col(timestamp_key).cast("long")
+                        F.col(table.timestamp).cast("long")
                         - F.col("ADMITTIME").cast("long")
                     )
                     / 60
@@ -260,7 +266,7 @@ class EHR(object):
 
             events = events.drop(
                 "LOS",
-                timestamp_key,
+                table.timestamp,
                 "INTIME",
                 "INTIME_DATE",
                 "ADMITTIME",
@@ -274,40 +280,86 @@ class EHR(object):
                     )
                     events = events.withColumn(col, mapping_expr[F.col(col)])
 
-            events = events.withColumn("MASK_TARGET", F.col(table["mask_target"][0]))
+            # Itemid  Value UOM Text
+            if table.endtime:
+                events = (
+                    events.withColumn("_ENDTIME", F.col(table.endtime))
+                    .drop(table.endtime)
+                    .withColumnRenamed("_ENDTIME", "ENDTIME")
+                )
+            else:
+                events = events.withColumn("ENDTIME", F.lit(None).cast(StringType()))
 
-            def process_row(table_name):
-                def _process_row(row):
-                    """
-                    input: row (cols: icustay_id, timestamp, ...)
-                    output: (text)
-                    """
-                    row = row.asDict()
-                    # Should INITIALIZE with blank arrays to prevent corruption in Pyspark... Why??
-                    text = table_name
-                    for col, val in row.items():
-                        if col in [self.icustay_key, "TIME", "_TIME", "MASK_TARGET"]:
-                            continue
-                        if val is None:
-                            continue
-                        # text += " " + col + " " + str(val)
-                        text += " " + str(val)
-                    text = re.sub(
-                        r"\d*\.\d+",
-                        lambda x: str(round(float(x.group(0)), 4)),
-                        str(text),
+            if table.itemid:
+                events = events.withColumnRenamed(table.itemid, "ITEMID")
+            else:
+                events = events.withColumn("ITEMID", F.lit(None).cast(StringType()))
+
+            @F.udf(returnType=StringType())
+            def merge_value(*args):
+                merged = args[0]
+                if len(args) >= 2:
+                    for arg in args:
+                        if arg is not None and arg != "___":
+                            merged = arg
+                            break
+                merged = re.sub(
+                    r"\d*\.\d+",
+                    lambda x: str(round(float(x.group(0)), 4)),
+                    str(merged),
+                )
+                return merged
+
+            if table.value:
+                events = (
+                    events.withColumn(
+                        "_VALUE", merge_value(*[F.col(i) for i in table.value])
                     )
-                    return text
+                    .drop(*table.value)
+                    .withColumnRenamed("_VALUE", "VALUE")
+                )
+            else:
+                events = events.withColumn("VALUE", F.lit(None).cast(StringType()))
 
-                return F.udf(_process_row, returnType=StringType())
+            if table.uom:
+                events = events.withColumnRenamed(table.uom, "UOM")
+            else:
+                events = events.withColumn("UOM", F.lit(None).cast(StringType()))
 
-            events = events.withColumn(
-                "TEXT",
-                process_row(table_name)(F.struct(*events.columns)),
-            ).select(self.icustay_key, "TIME", "_TIME", "TEXT", "MASK_TARGET")
+            @F.udf(returnType=StringType())
+            def process_text(*args):
+                text = [str(i) for i in args if i is not None and i != "___"]
+                text = " ".join(text)
+                text = re.sub(
+                    r"\d*\.\d+",
+                    lambda x: str(round(float(x.group(0)), 4)),
+                    str(text),
+                )
+                return text
 
+            if table.text:
+                events = (
+                    events.withColumn(
+                        "_TEXT", process_text(*[F.col(i) for i in table.text])
+                    )
+                    .drop(*table.text)
+                    .withColumnRenamed("_TEXT", "TEXT")
+                )
+            else:
+                events = events.withColumn("TEXT", F.lit(None).cast(StringType()))
             events = events.withColumn("TABLE_NAME", F.lit(table_name))
 
+            events = events.select(
+                self.icustay_key,
+                "_TIME",
+                "TIME",
+                "ENDTIME",
+                "ITEMID",
+                "VALUE",
+                "TEXT",
+                "UOM",
+                "TABLE_NAME",
+            )
             events_dfs.append(events)
         return reduce(lambda x, y: x.union(y), events_dfs)
 
@@ -316,43 +368,28 @@ class EHR(object):
             [
                 StructField("stay_id", IntegerType(), True),
                 StructField("time", ArrayType(StringType()), True),
+                StructField("endtime", ArrayType(StringType()), True),
+                StructField("itemid", ArrayType(StringType()), True),
+                StructField("value", ArrayType(StringType()), True),
                 StructField("text", ArrayType(StringType()), True),
+                StructField("uom", ArrayType(StringType()), True),
                 StructField("table_name", ArrayType(StringType()), True),
-                StructField("mask_target", ArrayType(StringType()), True),
             ]
         )
 
         def _make_input(events):
-            # Actually, this function does not have to return anything.
-            # However, return something(TIME) is required to satisfy the PySpark requirements.
+            # To ensure sorting, udf is necessary
             df = events.sort_values("_TIME")
-
+            df = df.drop(columns="_TIME")
             if len(df) <= self.min_event_size:
-                return pd.DataFrame(
-                    columns=["stay_id", "time", "text", "table_name", "mask_target"]
+                return pd.DataFrame(columns=df.columns).rename(
+                    columns=lambda x: x.lower()
                 )
-            # Remove duplicated glucoses (in lab/chart)
-            df["glucose_value"] = df["TEXT"].str.extract(
-                r"glucose.* (\d+)", flags=re.IGNORECASE, expand=False
-            )
-            df["is_glucose"] = df.apply(
-                lambda x: x["TEXT"] if pd.isna(x["glucose_value"]) else None, axis=1
-            )  # Prevent to drop dextrose/insulin
-            df.drop_duplicates(
-                subset=["glucose_value", "is_glucose", "TIME"],
-                inplace=True,
-                keep="last",
-            )  # Only for Glucoses.... Not for others...
-            return pd.DataFrame(
-                [
-                    {
-                        "stay_id": int(df[self.icustay_key].values[0]),
-                        "time": df["TIME"].values,
-                        "text": df["TEXT"].values,
-                        "table_name": df["TABLE_NAME"].values,
-                        "mask_target": df["MASK_TARGET"].values,
-                    }
-                ]
+            return (
+                df.groupby(self.icustay_key)
+                .agg(list)
+                .reset_index(drop=False)
+                .rename(columns=lambda x: x.lower())
             )
 
         if not isinstance(cohorts, pd.DataFrame):
@@ -363,9 +400,12 @@ class EHR(object):
             {
                 "stay_id": Value(dtype="int32"),
                 "time": Sequence(feature=Value(dtype="string")),
+                "endtime": Sequence(feature=Value(dtype="string")),
+                "itemid": Sequence(feature=Value(dtype="string")),
+                "value": Sequence(feature=Value(dtype="string")),
                 "text": Sequence(feature=Value(dtype="string")),
+                "uom": Sequence(feature=Value(dtype="string")),
                 "table_name": Sequence(feature=Value(dtype="string")),
-                "mask_target": Sequence(feature=Value(dtype="string")),
             }
         )
         dset = Dataset.from_spark(events, features=features)
