@@ -30,7 +30,7 @@ class Table:
     fname: str
     timestamp: str
     endtime: Optional[str] = None
-    itemid: Optional[str] = None
+    itemid: Optional[Union[str, list[str]]] = None
     value: Optional[List[str]] = None
     uom: Optional[str] = None
     text: Optional[List[str]] = None
@@ -280,7 +280,7 @@ class EHR(object):
                     )
                     events = events.withColumn(col, mapping_expr[F.col(col)])
 
-            # Itemid  Value UOM Text
+            # Itemid Value UOM Text
             if table.endtime:
                 events = (
                     events.withColumn("_ENDTIME", F.col(table.endtime))
@@ -291,7 +291,16 @@ class EHR(object):
                 events = events.withColumn("ENDTIME", F.lit(None).cast(StringType()))
 
             if table.itemid:
-                events = events.withColumnRenamed(table.itemid, "ITEMID")
+                if isinstance(table.itemid, list):
+                    template = " ".join(["%s" for _ in table.itemid])
+                    events = events.withColumn(
+                        "_ITEMID", F.format_string(template, *table.itemid)
+                    ).drop(*table.itemid)
+                else:
+                    events = events.withColumnRenamed(table.itemid, "_ITEMID").drop(
+                        table.itemid
+                    )
+                events = events.withColumnRenamed("_ITEMID", "ITEMID")
             else:
                 events = events.withColumn("ITEMID", F.lit(None).cast(StringType()))
 
