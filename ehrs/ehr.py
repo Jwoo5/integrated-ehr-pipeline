@@ -194,6 +194,7 @@ class EHR(object):
             logger.info("Start Preprocessing Tables")
 
         events_dfs = []
+        choices_dfs = []
         for table in self.tables:
             fname = table.fname
             table_name = fname.split("/")[-1][: -len(self.ext)]
@@ -370,9 +371,19 @@ class EHR(object):
                 "TABLE_NAME",
             )
             events_dfs.append(events)
-        return reduce(lambda x, y: x.union(y), events_dfs)
 
-    def make_input(self, cohorts, events, spark):
+            choices = events.select("ITEMID", "VALUE").distinct()
+            choices = choices.groupBy("ITEMID").agg(
+                F.collect_list("VALUE").alias("CHOICES")
+            )
+            choices = choices.withColumn("TABLE_NAME", F.lit(table_name))
+            choices_dfs.append(choices)
+
+        return reduce(lambda x, y: x.union(y), events_dfs), reduce(
+            lambda x, y: x.union(y), choices_dfs
+        )
+
+    def make_input(self, cohorts, events, choices, spark):
         schema = StructType(
             [
                 StructField("stay_id", IntegerType(), True),
@@ -491,12 +502,19 @@ class EHR(object):
 
         logger.info("Done encoding events.")
 
+        # Save choices
+        choices = choices.toPandas()
+        # multiindex (table_name, itemid)
+        choices = choices.set_index(["TABLE_NAME", "ITEMID"])
+        choices = choices.rename()
+        choices.to_csv(os.path.join(self.dest, f"{self.ehr_name}_choices.csv"))
+
         return
 
     def run_pipeline(self, spark) -> None:
         cohorts = self.build_cohorts(cached=self.cache)
-        events = self.process_tables(cohorts, spark)
-        self.make_input(cohorts, events, spark)
+        events, choices = self.process_tables(cohorts, spark)
+        self.make_input(cohorts, events, choices, spark)
 
     def add_special_tokens(self, new_special_tokens: Union[str, List]) -> None:
         if isinstance(new_special_tokens, str):
