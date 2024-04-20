@@ -19,7 +19,7 @@ def get_parser():
         "--dest", default="outputs", type=str, metavar="DIR", help="output directory"
     )
     parser.add_argument(
-        "--eicu_top_n", default=7, type=int, help="Number of top hospital cohorts to use for eicu"
+        "--eicu_region", nargs="*", action="store", choices=["West", "South"], type=str, default=["West", "South"]
     )
     parser.add_argument(
         "--valid-percent",
@@ -44,7 +44,7 @@ def split_save_cohort(args, save_prefix, cohort, patient_key):
             & (cum_len < int(len(shuffled)*2*args.valid_percent))].index), f'split_{seed}'] = 'valid'
         cohort.loc[cohort[patient_key].isin(
             shuffled[cum_len >= int(len(shuffled)*2*args.valid_percent)].index), f'split_{seed}'] = 'train'
-
+    
     cohort.to_csv(os.path.join(args.dest, f"{save_prefix}_cohort.csv"), index=False)
 
 
@@ -53,29 +53,27 @@ def main(args):
     eicu_icustay_key = "patientunitstayid"
     eicu_patient_key = "uniquepid"
     eicu_hospital_key = "hospitalid"
+    eicu_region_key = "region"
     mimiciii_icustay_key = "ICUSTAY_ID"
     mimiciii_dbsource = "DBSOURCE"
     mimiciii_patient_key = "SUBJECT_ID"
 
-    # TODO: cache path or data path
     cache_dir = os.path.expanduser("~/.cache/ehr")
     assert os.path.exists(cache_dir), "Cache path should exist and contain raw data files"
 
     # Create eICU Cohorts - Retrieve Top-N Hospitals from Original Cohort, and Divide into Separate Cohorts
     eicu = pd.read_csv(os.path.join(args.dest, "eicu_cohort.csv"))
     patient = pd.read_csv(os.path.join(cache_dir, 'eicu', 'patient.csv.gz'))
+    hospital = pd.read_csv(os.path.join(cache_dir, 'eicu', 'hospital.csv.gz'))[['hospitalid', 'region']]
 
     split_cols = [col for col in eicu if col.startswith('split_')]
     eicu = eicu.drop(split_cols, axis=1)
 
     eicu = eicu.merge(patient[[eicu_icustay_key, eicu_hospital_key]], how='left', on=eicu_icustay_key)
-    eicu_top_n = [i for idx, i in enumerate(eicu[eicu_hospital_key].value_counts().index) if idx<=(args.eicu_top_n - 1)]
-
-    for i in eicu_top_n:
-        eicu_cohort = eicu[eicu[eicu_hospital_key] == i]
-
-        # Create Split and Save Cohort
-        split_save_cohort(args, f"eicu_{i}", eicu_cohort, eicu_patient_key)
+    eicu = eicu.merge(hospital[[eicu_hospital_key, eicu_region_key]], how='left', on=eicu_hospital_key)
+    
+    for region in args.eicu_region:
+        split_save_cohort(args, f"eicu_{region}", eicu[eicu['region']==region], eicu_patient_key)
 
     # Create MIMIC-III cohorts - Divide Cohorts Based on DBSOURCE
     mimiciii = pd.read_csv(os.path.join(args.dest, "mimiciii_cohort.csv"))
@@ -88,10 +86,7 @@ def main(args):
     mimiciii_dbs = {"cv": "carevue", "mv": "metavision"}
 
     for i in mimiciii_dbs.keys():
-        mimiciii_cohort = mimiciii[mimiciii[mimiciii_dbsource] == mimiciii_dbs[i]]
-
-        # Create Split and Save Cohort
-        split_save_cohort(args, f"mimiciii_{i}", mimiciii_cohort, mimiciii_patient_key)
+        split_save_cohort(args, f"mimiciii_{i}", mimiciii[mimiciii[mimiciii_dbsource] == mimiciii_dbs[i]], mimiciii_patient_key)
     
 
 if __name__ == "__main__":
