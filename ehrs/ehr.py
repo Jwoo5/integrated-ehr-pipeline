@@ -372,7 +372,7 @@ class EHR(object):
             )
             events_dfs.append(events)
 
-            choices = events.select("ITEMID", "VALUE").distinct()
+            choices = events.select("ITEMID", "VALUE")
             choices = choices.groupBy("ITEMID").agg(
                 F.collect_list("VALUE").alias("CHOICES")
             )
@@ -506,7 +506,7 @@ class EHR(object):
         choices = choices.toPandas()
         # multiindex (table_name, itemid)
         choices = choices.set_index(["TABLE_NAME", "ITEMID"])
-        choices = choices.rename()
+        choices = choices.rename(columns={"CHOICES": "VALUE"})
         choices.to_csv(os.path.join(self.dest, f"{self.ehr_name}_choices.csv"))
 
         return
