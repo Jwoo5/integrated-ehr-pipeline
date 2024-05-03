@@ -4,11 +4,13 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
 from typing import List, Optional, Union
 
+import numpy as np
 import pandas as pd
 import pyspark.sql.functions as F
 from datasets import Dataset, Features, Sequence, Value
@@ -19,7 +21,7 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
-from pyspark.sql.window import Window
+from sklearn.mixture import GaussianMixture
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
@@ -506,8 +508,50 @@ class EHR(object):
         choices = choices.toPandas()
         # multiindex (table_name, itemid)
         choices = choices.set_index(["TABLE_NAME", "ITEMID"])
-        choices = choices.rename(columns={"CHOICES": "VALUE"})
-        choices.to_csv(os.path.join(self.dest, f"{self.ehr_name}_choices.csv"))
+        choices = choices.drop("microbiologyevents", level=0)
+
+        def _value_to_sampling(x):
+            floats = []
+            strings = []
+            for i in x["CHOICES"]:
+                try:
+                    floats.append(float(i))
+                except:
+                    strings.append(i)
+
+            # If the number of unique floats is less than 20, treat as categorical
+            if len(set(floats)) <= 20:
+                strings += [
+                    str(i) for i in floats
+                ]
+                floats = []
+
+            counts = dict(Counter(strings))
+
+            vocab, weights = list(counts.keys()), counts.values()
+            weights = [i / sum(weights) for i in weights]
+
+            float_ratio = len(floats) / (len(floats) + len(strings))
+
+            x["VOCAB"] = vocab
+            x["ALL_VOCAB"] = set(strings + [str(i) for i in floats])
+            x["WEIGHTS"] = weights
+            x["FLOAT_RATIO"] = float_ratio
+
+            if len(floats) == 0:
+                x["GM"] = {"means": [0, 0, 0], "stds": [0, 0, 0], "weights": [0, 0, 0]}
+            else:
+                gm = GaussianMixture(n_components=3, random_state=42)
+                gm.fit(np.array(floats).reshape(-1, 1))
+                x["GM"] = {
+                    "means": gm.means_.reshape(-1).tolist(),
+                    "stds": np.sqrt(gm.covariances_.reshape(-1)).tolist(),
+                    "weights": gm.weights_.tolist(),
+                }
+            return x
+
+        choices = choices.apply(_value_to_sampling, axis=1).drop(columns="CHOICES")
+        choices.to_pickle(os.path.join(self.dest, f"{self.ehr_name}_choices.pkl"))
 
         return
 
