@@ -142,7 +142,7 @@ class EHR(object):
     @property
     def patient_key(self):
         return self._patient_key
-    
+
     @property
     def determine_first_icu(self):
         return self._determine_first_icu
@@ -400,6 +400,7 @@ class EHR(object):
             [
                 StructField("stay_id", IntegerType(), True),
                 StructField("time", ArrayType(StringType()), True),
+                StructField("offset", ArrayType(IntegerType()), True),
                 StructField("endtime", ArrayType(StringType()), True),
                 StructField("itemid", ArrayType(StringType()), True),
                 StructField("value", ArrayType(StringType()), True),
@@ -412,7 +413,7 @@ class EHR(object):
         def _make_input(events):
             # To ensure sorting, udf is necessary
             df = events.sort_values("_TIME")
-            df = df.drop(columns="_TIME")
+            df = df.rename(columns={"_TIME": "offset"})
             if len(df) <= self.min_event_size:
                 return pd.DataFrame(columns=df.columns).rename(
                     columns=lambda x: x.lower()
@@ -432,6 +433,7 @@ class EHR(object):
             {
                 "stay_id": Value(dtype="int32"),
                 "time": Sequence(feature=Value(dtype="string")),
+                "offset": Sequence(feature=Value(dtype="int32")),
                 "endtime": Sequence(feature=Value(dtype="string")),
                 "itemid": Sequence(feature=Value(dtype="string")),
                 "value": Sequence(feature=Value(dtype="string")),
@@ -531,9 +533,7 @@ class EHR(object):
 
             # If the number of unique floats is less than 20, treat as categorical
             if len(set(floats)) <= 20:
-                strings += [
-                    str(i) for i in floats
-                ]
+                strings += [str(i) for i in floats]
                 floats = []
 
             counts = dict(Counter(strings))
