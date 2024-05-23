@@ -142,6 +142,10 @@ class EHR(object):
     @property
     def patient_key(self):
         return self._patient_key
+    
+    @property
+    def determine_first_icu(self):
+        return self._determine_first_icu
 
     @property
     def num_special_tokens(self):
@@ -173,6 +177,12 @@ class EHR(object):
         # since it requires to observe each next icustays,
         # which would have been excluded in the final cohorts
         icustays.sort_values([self.hadm_key, self.icustay_key], inplace=True)
+
+        icustays["readmission"] = 1
+        icustays.loc[
+            icustays.groupby(self.hadm_key)[self.determine_first_icu].idxmax(),
+            "readmission",
+        ] = 0
 
         logger.info(
             "cohorts have been built successfully. Loaded {} cohorts.".format(

@@ -57,6 +57,7 @@ class MIMICIV(EHR):
         self._admission_fname = "hosp/admissions" + self.ext
         self._diagnosis_fname = "hosp/diagnoses_icd" + self.ext
         self._d_diagnosis_fname = "hosp/d_icd_diagnoses" + self.ext
+        self._determine_first_icu = "INTIME"
 
         labevents = Table(
             fname="hosp/labevents" + self.ext,
