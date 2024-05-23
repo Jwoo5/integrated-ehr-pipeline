@@ -217,15 +217,18 @@ class MIMICIV(EHR):
             d_diagnosis, how="left", on=["icd_code", "icd_version"]
         )
 
+        diagnosis = self.icd10toicd9(diagnosis)
+
         diagnosis = (
-            diagnosis[[self.hadm_key, "long_title"]]
+            diagnosis[[self.hadm_key, "icd_code_converted", "long_title"]]
             .groupby(self.hadm_key)
             .agg(list)
-            .rename(columns={"long_title": "diagnosis"})
+            .rename(columns={"icd_code_converted": "icd_9", "long_title": "icd_text"})
         )
 
         icustays = icustays.merge(diagnosis, how="left", on=self.hadm_key)
-        icustays["diagnosis"] = icustays["diagnosis"].fillna("").apply(list)
+        icustays["icd_9"] = icustays["icd_9"].fillna("").apply(list)
+        icustays["icd_text"] = icustays["icd_text"].fillna("").apply(list)
 
         icustays["ADMITTIME"] = pd.to_datetime(
             icustays["ADMITTIME"], infer_datetime_format=True, utc=True
@@ -253,6 +256,44 @@ class MIMICIV(EHR):
         )
 
         return icustays
+
+    def icd10toicd9(self, dx):
+        gem = pd.read_csv(self.gem_path)
+        dx_icd_10 = dx[dx["icd_version"] == 10]["icd_code"]
+
+        unique_elem_no_map = set(dx_icd_10) - set(gem["icd10cm"])
+
+        map_cms = dict(zip(gem["icd10cm"], gem["icd9cm"]))
+        map_manual = dict.fromkeys(unique_elem_no_map, "NaN")
+
+        for code_10 in map_manual:
+            for i in range(len(code_10), 0, -1):
+                tgt_10 = code_10[:i]
+                if tgt_10 in gem["icd10cm"]:
+                    tgt_9 = (
+                        gem[gem["icd10cm"].str.contains(tgt_10)]["icd9cm"]
+                        .mode()
+                        .iloc[0]
+                    )
+                    map_manual[code_10] = tgt_9
+                    break
+
+        def icd_convert(icd_version, icd_code):
+            if icd_version == 9:
+                return icd_code
+
+            elif icd_code in map_cms:
+                return map_cms[icd_code]
+
+            elif icd_code in map_manual:
+                return map_manual[icd_code]
+            else:
+                logger.warn("WRONG CODE: " + icd_code)
+
+        dx["icd_code_converted"] = dx.apply(
+            lambda x: icd_convert(x["icd_version"], x["icd_code"]), axis=1
+        )
+        return dx
 
     def infer_data_extension(self) -> str:
         if (
