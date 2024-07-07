@@ -70,6 +70,7 @@ class MIMICIV(EHR):
             code="itemid",
             desc="hosp/d_labitems" + self.ext,
             desc_key="label",
+            merge_value=True,
         )
 
         microbiologyevents = Table(

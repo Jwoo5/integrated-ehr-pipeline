@@ -37,7 +37,7 @@ def get_parser():
         "--ehr",
         type=str,
         required=True,
-        choices=["mimiciv"],
+        choices=["mimiciv", "eicu"],
         help="name of the ehr system to be processed.",
     )
     parser.add_argument(
@@ -144,8 +144,8 @@ def main(args):
     ehr = EHR_REGISTRY[args.ehr](args)
     spark = (
         SparkSession.builder.master(f"local[{args.num_threads}]")
-        .config("spark.driver.memory", "200g")
-        .config("spark.driver.maxResultSize", "20g")
+        .config("spark.driver.memory", "400g")
+        .config("spark.driver.maxResultSize", "40g")
         .config("spark.network.timeout", "100s")
         .appName("Main_Preprocess")
         .getOrCreate()

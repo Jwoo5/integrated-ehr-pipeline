@@ -39,6 +39,7 @@ class Table:
     code: Optional[str] = None
     desc: Optional[str] = None
     desc_key: Optional[str] = None
+    merge_value: Optional[bool] = False
 
 
 class EHR(object):
@@ -234,37 +235,33 @@ class EHR(object):
                     )
                 )
 
-            if self.icustay_key in events.columns:
-                events = events.drop(self.icustay_key)
-            # HADM Join -> duplicated by icy ids -> can process w.  intime
-            events = events.join(
-                F.broadcast(
-                    cohorts.select(
-                        self.hadm_key,
-                        self.icustay_key,
-                        "INTIME",
-                        "INTIME_DATE",
-                        "ADMITTIME",
-                        "LOS",
-                    )
-                ),
-                on=self.hadm_key,
-                how="right",
-            )
-            # To make as date + hours + minutes
-            for col in [table.timestamp, "endtime", "stoptime"]:
-                if col in events.columns:
-                    events = events.withColumn(col, F.to_timestamp(col))
-                    new_name = "TIME" if col == table.timestamp else col
-                    events = events.withColumn(
-                        new_name,
-                        F.expr(
-                            f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
-                        ),
-                    )
-
-            events = (
-                events.withColumn(
+            # IF MIMIC-IV
+            if self.ehr_name == "mimiciv":
+                events = events.join(
+                    F.broadcast(
+                        cohorts.select(
+                            self.hadm_key,
+                            self.icustay_key,
+                            "INTIME",
+                            "INTIME_DATE",
+                            "ADMITTIME",
+                            "LOS",
+                        )
+                    ),
+                    on=self.hadm_key,
+                    how="right",
+                )
+                for col in events.columns:
+                    if "time" in col:
+                        events = events.withColumn(col, F.to_timestamp(col))
+                        new_name = "TIME" if col == table.timestamp else col
+                        events = events.withColumn(
+                            new_name,
+                            F.expr(
+                                f"concat('Day ', datediff({col}, INTIME_DATE), ' ', format_string('%02d', hour({col})), ':', format_string('%02d', minute({col})))"
+                            ),
+                        )
+                events = events.withColumn(
                     "_TIME",
                     (
                         F.col(table.timestamp).cast("long")
@@ -273,13 +270,35 @@ class EHR(object):
                     / 60
                     - F.col("INTIME"),
                 )
-                .filter(F.col("_TIME") >= 0)
-                .filter(F.col("_TIME") < F.col("LOS") * 60 * 24)
-            )  # Only within icu stay
+
+            elif self.ehr_name == "eicu":
+                events = events.join(
+                    F.broadcast(
+                        cohorts.select(
+                            self.icustay_key,
+                            "LOS",
+                        )
+                    ),
+                    on=self.icustay_key,
+                    how="right",
+                )
+                for col in events.columns:
+                    if "offset" in col:
+                        new_name = "TIME" if col == table.timestamp else col
+                        events = events.withColumn(
+                            new_name,
+                            F.expr(
+                                f"concat('Day ', floor({col} / 1440), ' ', lpad(floor(({col} % 1440) / 60), 2, '0'), ':', lpad(floor(({col} % 1440) % 60), 2, '0'))"
+                            ),
+                        )
+                events = events.withColumn("_TIME", F.col(table.timestamp).cast("long"))
+
+            events = events.filter(F.col("_TIME") >= 0).filter(
+                F.col("_TIME") < F.col("LOS") * 60 * 24
+            )
 
             events = events.drop(
                 "LOS",
-                table.timestamp,
                 "INTIME",
                 "INTIME_DATE",
                 "ADMITTIME",
@@ -325,20 +344,21 @@ class EHR(object):
                         if arg is not None and arg != "___":
                             merged = arg
                             break
-                merged = re.sub(
-                    r"\d*\.\d+",
-                    lambda x: str(round(float(x.group(0)), 4)),
-                    str(merged),
-                )
                 return merged
 
             if table.value:
-                events = (
-                    events.withColumn(
-                        "_VALUE", merge_value(*[F.col(i) for i in table.value])
+                table_value = table.value
+                if table.merge_value:
+                    events = (
+                        events.withColumn(
+                            "_VALUE", merge_value(*[F.col(i) for i in table.value])
+                        )
+                        .drop(*table.value)
+                        .withColumnRenamed("_VALUE", "VALUE")
                     )
-                    .drop(*table.value)
-                    .withColumnRenamed("_VALUE", "VALUE")
+                    table_value = ["VALUE"]
+                events = events.withColumn(
+                    "VALUE", F.concat(*[F.col(i) for i in table_value])
                 )
             else:
                 events = events.withColumn("VALUE", F.lit(None).cast(StringType()))
@@ -413,13 +433,13 @@ class EHR(object):
         def _make_input(events):
             # To ensure sorting, udf is necessary
             df = events.sort_values("_TIME")
-            df = df.rename(columns={"_TIME": "offset"})
+            df = df.rename(columns={"_TIME": "offset", self.icustay_key: "stay_id"})
             if len(df) <= self.min_event_size:
                 return pd.DataFrame(columns=df.columns).rename(
                     columns=lambda x: x.lower()
                 )
             return (
-                df.groupby(self.icustay_key)
+                df.groupby("stay_id")
                 .agg(list)
                 .reset_index(drop=False)
                 .rename(columns=lambda x: x.lower())
@@ -446,6 +466,7 @@ class EHR(object):
 
         processed_df = events.select("stay_id", "time").toPandas()
         previous_len = len(cohorts)
+        cohorts = cohorts.rename(columns={self.icustay_key: "stay_id"})
         cohorts = pd.merge(cohorts, processed_df, on="stay_id", how="inner")
         logger.info(
             "Total {} patients are skipped due to few events".format(
@@ -492,10 +513,11 @@ class EHR(object):
             samples = []
             for values in zip(*x.values()):
                 sample = {k: v for k, v in zip(x.keys(), values)}
-                stay_id = sample[self.icustay_key]
+                stay_id = sample["stay_id"]
                 row = cohorts.loc[stay_id]
                 for col in cohorts.columns:
-                    if col in ["ADMITTIME", "time", "INTIME_DATE", "dod"]:
+                    # TODO: None Returned somewhere!
+                    if col in ["ADMITTIME", "time", "INTIME_DATE", "dod", "endtime"]:
                         continue
                     sample[col] = row[col]
                 samples.append(sample)
@@ -505,7 +527,10 @@ class EHR(object):
             }
             return x
 
-        _cohorts = cohorts.set_index(self.icustay_key, drop=True)
+        _cohorts = cohorts.set_index("stay_id", drop=True)
+        for k, v in _cohorts.dtypes.to_dict().items():
+            if v == "object":
+                _cohorts[k] = _cohorts[k].fillna("")
 
         dset = dset.map(mapper, batched=True, fn_kwargs={"cohorts": _cohorts})
         dset.save_to_disk(os.path.join(self.dest, self.ehr_name))
@@ -518,16 +543,27 @@ class EHR(object):
 
         # Save choices
         choices = choices.toPandas()
+        choices.to_pickle("choices.pkl")
         # multiindex (table_name, itemid)
         choices = choices.set_index(["TABLE_NAME", "ITEMID"])
-        choices = choices.drop("microbiologyevents", level=0)
+        choices = choices.drop("microbiologyevents", level=0, errors="ignore")
 
         def _value_to_sampling(x):
+            # eICU 에는 value 가 모두 None 인 경우가 꽤 있다... 이 경우는 아예 제외해야함...!
+            if len(x["CHOICES"]) == 0:
+                x["VOCAB"] = []
+                x["ALL_VOCAB"] = set()
+                x["WEIGHTS"] = []
+                x["FLOAT_RATIO"] = 0
+                x["GM"] = {"means": [0, 0, 0], "stds": [0, 0, 0], "weights": [0, 0, 0]}
+                return x
+
             floats = []
             strings = []
             for i in x["CHOICES"]:
                 try:
-                    floats.append(float(i))
+                    if float(i) < 1e10: # Handle Errornous value in eICU
+                        floats.append(float(i))
                 except:
                     strings.append(i)
 
