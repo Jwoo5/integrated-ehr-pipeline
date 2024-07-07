@@ -1,4 +1,9 @@
 import os
+import time
+
+os.environ["TZ"] = "UTC"
+time.tzset()
+
 import sys
 import logging
 import argparse
@@ -202,6 +207,7 @@ def main(args):
         .config("spark.driver.memory", "100g")
         .config("spark.driver.maxResultSize", "10g")
         .config("spark.network.timeout", "100s")
+        .config("spark.sql.timeZone", "UTC")
         .appName("Main_Preprocess")
         .getOrCreate()
     )
