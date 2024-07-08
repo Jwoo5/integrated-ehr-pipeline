@@ -237,6 +237,9 @@ class EHR(object):
 
             # IF MIMIC-IV
             if self.ehr_name == "mimiciv":
+                if self.icustay_key in events.columns:
+                    events = events.drop(self.icustay_key)
+
                 events = events.join(
                     F.broadcast(
                         cohorts.select(
@@ -562,7 +565,7 @@ class EHR(object):
             strings = []
             for i in x["CHOICES"]:
                 try:
-                    if float(i) < 1e10: # Handle Errornous value in eICU
+                    if float(i) < 1e10:  # Handle Errornous value in eICU
                         floats.append(float(i))
                 except:
                     strings.append(i)
