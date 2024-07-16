@@ -195,7 +195,7 @@ class MIMICIV(EHR):
         )
 
         icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
-        icustays.loc[:, "INTIME"] = pd.to_datetime(
+        icustays["INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True, utc=True
         )
 
@@ -234,16 +234,44 @@ class MIMICIV(EHR):
         icustays["ADMITTIME"] = pd.to_datetime(
             icustays["ADMITTIME"], infer_datetime_format=True, utc=True
         )
+        icustays["DEATHTIME"] = pd.to_datetime(
+            icustays["DEATHTIME"], infer_datetime_format=True, utc=True
+        )
+
+        sofa_df = pd.read_csv(
+            os.path.join(self.cfg.derived_path, "sofa.csv"),
+            usecols=["stay_id", "starttime", "sofa_24hours"],
+        )
+        sofa_df = pd.merge(
+            icustays[["stay_id", "INTIME"]], sofa_df, on="stay_id", how="left"
+        )
+        sofa_df["starttime"] = pd.to_datetime(
+            sofa_df["starttime"], infer_datetime_format=True, utc=True
+        )
+        sofa_df["offset"] = sofa_df.apply(
+            lambda x: (x["starttime"] - x["INTIME"]).total_seconds() // 60,
+            axis=1,
+        )
+        sofa_df = (
+            sofa_df.sort_values("offset")
+            .groupby("stay_id")
+            .agg({"offset": list, "sofa_24hours": list})
+        )
+        sofa_df["sofa"] = sofa_df.apply(
+            lambda x: (x["offset"], x["sofa_24hours"]), axis=1
+        )
+        sofa_df.reset_index(inplace=True)
+        icustays = pd.merge(
+            icustays, sofa_df[["stay_id", "sofa"]], on="stay_id", how="left"
+        )
 
         icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
 
         icustays["INTIME"] = (
-            pd.to_datetime(icustays["INTIME"], infer_datetime_format=True, utc=True)
-            - icustays["ADMITTIME"]
+            icustays["INTIME"] - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
         icustays["DEATHTIME"] = (
-            pd.to_datetime(icustays["DEATHTIME"], infer_datetime_format=True, utc=True)
-            - icustays["ADMITTIME"]
+            icustays["DEATHTIME"] - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
 
         icustays = icustays.drop(

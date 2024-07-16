@@ -139,6 +139,12 @@ def get_parser():
         "--add_chart", action="store_true", help="whether to add chartevents or not"
     )
 
+    parser.add_argument(
+        "--derived_path",
+        default="/nfs_edlab/junukim/LLM_Pred_data/",
+        help="csv path derived from MIMIC-IV using mimic-code repository",
+    )
+
     return parser
 
 

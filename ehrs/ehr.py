@@ -519,9 +519,6 @@ class EHR(object):
                 stay_id = sample["stay_id"]
                 row = cohorts.loc[stay_id]
                 for col in cohorts.columns:
-                    # TODO: None Returned somewhere!
-                    if col in ["ADMITTIME", "time", "INTIME_DATE", "dod", "endtime"]:
-                        continue
                     sample[col] = row[col]
                 samples.append(sample)
             x = {
