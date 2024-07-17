@@ -152,7 +152,7 @@ class EHR(object):
     def num_special_tokens(self):
         return len(self.special_tokens_dict)
 
-    def build_cohorts(self, icustays, cached=False):
+    def build_cohorts(self, icustays, spark, cached=False):
         if cached:
             cohorts = self.load_from_cache(self.ehr_name + ".cohorts")
             if cohorts is not None:
@@ -602,7 +602,7 @@ class EHR(object):
         return
 
     def run_pipeline(self, spark) -> None:
-        cohorts = self.build_cohorts(cached=self.cache)
+        cohorts = self.build_cohorts(spark, cached=self.cache)
         events, choices = self.process_tables(cohorts, spark)
         self.make_input(cohorts, events, choices, spark)
 

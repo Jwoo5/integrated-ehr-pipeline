@@ -3,6 +3,8 @@ import logging
 import os
 
 import pandas as pd
+import pyspark.sql.functions as F
+from pyspark.sql.types import ArrayType, DoubleType, IntegerType
 
 from ehrs import EHR, Table, register_ehr
 
@@ -166,17 +168,17 @@ class MIMICIV(EHR):
         self._hadm_key = "hadm_id"
         self._patient_key = "subject_id"
 
-    def build_cohorts(self, cached=False):
+    def build_cohorts(self, spark, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 
-        icustays = self.make_compatible(icustays)
+        icustays = self.make_compatible(icustays, spark)
         self.icustays = icustays
 
-        cohorts = super().build_cohorts(icustays, cached=cached)
+        cohorts = super().build_cohorts(icustays, spark, cached=cached)
 
         return cohorts
 
-    def make_compatible(self, icustays):
+    def make_compatible(self, icustays, spark):
         patients = pd.read_csv(os.path.join(self.data_dir, self.patient_fname))
         admissions = pd.read_csv(os.path.join(self.data_dir, self.admission_fname))
 
@@ -265,6 +267,8 @@ class MIMICIV(EHR):
             icustays, sofa_df[["stay_id", "sofa"]], on="stay_id", how="left"
         )
 
+        icustays = self.vis_score(icustays, spark)
+
         icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
 
         icustays["INTIME"] = (
@@ -323,6 +327,138 @@ class MIMICIV(EHR):
             lambda x: icd_convert(x["icd_version"], x["icd_code"]), axis=1
         )
         return dx
+
+    def vis_score(self, cohorts, spark):
+        weights = spark.read.csv(
+            os.path.join(self.cfg.derived_path, "weight_durations.csv"), header=True
+        ).drop("weight_type")
+
+        weights = (
+            weights.withColumn("weight_starttime", F.to_timestamp("starttime"))
+            .withColumn("weight_endtime", F.to_timestamp("endtime"))
+            .drop("starttime", "endtime")
+            .withColumnRenamed("stay_id", "weight_stay_id")
+        )
+
+        ie = spark.read.csv(
+            os.path.join(self.data_dir, "icu/inputevents" + self.ext), header=True
+        )
+        ie = ie.select("stay_id", "starttime", "endtime", "itemid", "rate", "rateuom")
+        ie = ie.withColumn("starttime", F.to_timestamp("starttime"))
+        ie = ie.withColumn("endtime", F.to_timestamp("endtime"))
+
+        ie = ie.filter(
+            F.col("itemid").isin([221662, 221653, 221289, 221986, 221906, 222315])
+        )
+
+        ie = ie.join(
+            F.broadcast(weights),
+            on=[
+                ie.stay_id == weights.weight_stay_id,
+                ie.starttime >= weights.weight_starttime,
+                ie.starttime < weights.weight_endtime,
+            ],
+            how="left",
+        ).drop("weight_stay_id", "weight_starttime", "weight_endtime")
+
+        cohorts = spark.createDataFrame(cohorts)
+
+        ie = ie.join(
+            F.broadcast(cohorts.select("stay_id", "INTIME")), on="stay_id", how="left"
+        )
+
+        ie = (
+            ie.withColumn(
+                "starttime",
+                ((F.col("starttime") - F.col("INTIME")).cast("long") / 60).cast("long"),
+            )
+            .withColumn(
+                "endtime",
+                ((F.col("endtime") - F.col("INTIME")).cast("long") / 60).cast("long"),
+            )
+            .drop("INTIME")
+        )
+
+        ie = ie.dropna(subset=["rate", "rateuom", "starttime", "endtime"])
+
+        ie = ie.withColumn(
+            "VIS",
+            F.when(
+                F.col("itemid").isin([221662, 221653]), F.col("rate")
+            )  # dopamine, dobutamine
+            .when(F.col("itemid") == 221289, F.col("rate") * 100)  # epinephrine
+            .when(F.col("itemid") == 221986, F.col("rate") * 10)  # milrinone
+            .when(
+                F.col("itemid") == 222315,  # vasopressin
+                F.when(
+                    F.col("rateuom") == "units/hour",
+                    F.col("rate") / 60 * 10000 / F.col("weight"),
+                ).otherwise(
+                    F.col("rate") * 10000 / F.col("weight")
+                ),  # units/minute
+            )
+            .when(
+                F.col("itemid") == 221906,  # norepinephrine
+                F.when(F.col("rateuom") == "mcg/kg/min", F.col("rate") * 100).otherwise(
+                    F.col("rate") * 1000 * 100  # mg/kg/min
+                ),
+            )
+            .otherwise(F.lit(None)),
+        )
+
+        ie = ie.dropna(subset="VIS")
+
+        @F.udf(ArrayType(DoubleType()))
+        def cumulate_vis(starttimes, endtimes, viss):
+            viss = list(map(float, viss))
+            unique_timestamps = sorted(set(starttimes).union(set(endtimes)))
+            vis = []
+            for timestamp in unique_timestamps:
+                total_vis = sum(
+                    [
+                        viss[i]
+                        for i in range(len(starttimes))
+                        if starttimes[i] <= timestamp < endtimes[i]
+                    ]
+                )
+                vis.append(float(total_vis))
+
+            return vis
+
+        @F.udf(ArrayType(IntegerType()))
+        def get_unique_timestamps(starttimes, endtimes):
+            return sorted(set(starttimes).union(set(endtimes)))
+
+        ie = ie.groupBy("stay_id").agg(
+            F.collect_list("starttime").alias("starttimes"),
+            F.collect_list("endtime").alias("endtimes"),
+            F.collect_list("VIS").alias("viss"),
+        )
+        ie = ie.withColumn(
+            "vis_time",
+            get_unique_timestamps(F.col("starttimes"), F.col("endtimes")),
+        ).withColumn(
+            "vis_score",
+            cumulate_vis(F.col("starttimes"), F.col("endtimes"), F.col("viss")),
+        )
+        cohorts = cohorts.join(
+            F.broadcast(ie.select("stay_id", "vis_time", "vis_score")),
+            on="stay_id",
+            how="left",
+        )
+
+        cohorts = cohorts.toPandas()
+
+        cohorts["VIS"] = cohorts.apply(
+            lambda x: (
+                (x["vis_time"], x["vis_score"])
+                if x["vis_time"] is not None
+                else ([], [])
+            ),
+            axis=1,
+        )
+        cohorts.to_pickle("cohorts.pkl")
+        return cohorts.drop(columns=["vis_time", "vis_score"])
 
     def infer_data_extension(self) -> str:
         if (
