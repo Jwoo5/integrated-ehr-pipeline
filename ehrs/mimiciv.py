@@ -187,11 +187,12 @@ class MIMICIV(EHR):
             columns={
                 "los": "LOS",
                 "intime": "INTIME",
+                "outtime": "OUTTIME",
             }
         )
         admissions = admissions.rename(
             columns={
-                "deathtime": "DEATHTIME",
+                "dischtime": "DISCHTIME",
                 "admittime": "ADMITTIME",
             }
         )
@@ -199,6 +200,9 @@ class MIMICIV(EHR):
         icustays = icustays[icustays["first_careunit"] == icustays["last_careunit"]]
         icustays["INTIME"] = pd.to_datetime(
             icustays["INTIME"], infer_datetime_format=True, utc=True
+        )
+        icustays["OUTTIME"] = pd.to_datetime(
+            icustays["OUTTIME"], infer_datetime_format=True, utc=True
         )
 
         icustays = icustays.merge(patients, on="subject_id", how="left")
@@ -209,7 +213,9 @@ class MIMICIV(EHR):
         )
 
         icustays = icustays.merge(
-            admissions[[self.hadm_key, "DEATHTIME", "ADMITTIME", "race"]],
+            admissions[
+                [self.hadm_key, "DISCHTIME", "ADMITTIME", "race", "discharge_location"]
+            ],
             how="left",
             on=self.hadm_key,
         )
@@ -236,8 +242,13 @@ class MIMICIV(EHR):
         icustays["ADMITTIME"] = pd.to_datetime(
             icustays["ADMITTIME"], infer_datetime_format=True, utc=True
         )
-        icustays["DEATHTIME"] = pd.to_datetime(
-            icustays["DEATHTIME"], infer_datetime_format=True, utc=True
+        icustays["DISCHTIME"] = pd.to_datetime(
+            icustays["DISCHTIME"], infer_datetime_format=True, utc=True
+        )
+        icustays["IN_ICU_MORTALITY"] = (
+            (icustays["INTIME"] < icustays["DISCHTIME"])
+            & (icustays["DISCHTIME"] <= icustays["OUTTIME"])
+            & (icustays["discharge_location"] == "DIED")
         )
 
         sofa_df = pd.read_csv(
@@ -274,9 +285,6 @@ class MIMICIV(EHR):
         icustays["INTIME"] = (
             icustays["INTIME"] - icustays["ADMITTIME"]
         ).dt.total_seconds() // 60
-        icustays["DEATHTIME"] = (
-            icustays["DEATHTIME"] - icustays["ADMITTIME"]
-        ).dt.total_seconds() // 60
 
         icustays = icustays.drop(
             columns=[
@@ -285,6 +293,7 @@ class MIMICIV(EHR):
                 "anchor_age",
                 "anchor_year",
                 "anchor_year_group",
+                "discharge_location",
             ]
         )
 
@@ -449,7 +458,7 @@ class MIMICIV(EHR):
 
         cohorts = cohorts.toPandas()
 
-        cohorts["VIS"] = cohorts.apply(
+        cohorts["vis"] = cohorts.apply(
             lambda x: (
                 (x["vis_time"], x["vis_score"])
                 if x["vis_time"] is not None
