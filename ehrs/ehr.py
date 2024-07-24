@@ -360,8 +360,15 @@ class EHR(object):
                         .withColumnRenamed("_VALUE", "VALUE")
                     )
                     table_value = ["VALUE"]
+                round_number = F.udf(
+                    lambda text: re.sub(
+                        r"\d*\.\d+",
+                        lambda x: str(round(float(x.group(0)), 4)),
+                        str(text),
+                    )
+                )
                 events = events.withColumn(
-                    "VALUE", F.concat(*[F.col(i) for i in table_value])
+                    "VALUE", round_number(F.concat(*[F.col(i) for i in table_value]))
                 )
             else:
                 events = events.withColumn("VALUE", F.lit(None).cast(StringType()))
