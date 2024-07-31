@@ -1,14 +1,8 @@
 import glob
 import logging
 import os
-from collections import Counter
 
-import numpy as np
 import pandas as pd
-import pyspark.sql.functions as F
-import treelib
-from pyspark.sql.window import Window
-
 from ehrs import EHR, Table, register_ehr
 
 logger = logging.getLogger(__name__)

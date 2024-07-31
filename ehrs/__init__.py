@@ -1,8 +1,6 @@
 import importlib
 import os
 
-from .ehr import EHR, Table
-
 EHR_REGISTRY = {}
 
 __all__ = "EHR"
