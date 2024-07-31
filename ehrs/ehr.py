@@ -280,6 +280,8 @@ class EHR(object):
                         cohorts.select(
                             self.icustay_key,
                             "LOS",
+                            "INTIME_24_MINUTES",
+                            "INTIME",
                         )
                     ),
                     on=self.icustay_key,
@@ -287,11 +289,15 @@ class EHR(object):
                 )
                 for col in events.columns:
                     if "offset" in col:
+                        # NOTE: Might not work if col "TIME" in ehr tables (not exist in eicu)
                         new_name = "TIME" if col == table.timestamp else col
+                        events = events.withColumn(
+                            new_name, F.col("INTIME_24_MINUTES") + F.col(col)
+                        )
                         events = events.withColumn(
                             new_name,
                             F.expr(
-                                f"concat('Day ', floor({col} / 1440), ' ', lpad(floor(({col} % 1440) / 60), 2, '0'), ':', lpad(floor(({col} % 1440) % 60), 2, '0'))"
+                                f"concat('Day ', floor({new_name} / 1440), ' ', lpad(floor(({new_name} % 1440) / 60), 2, '0'), ':', lpad(floor(({new_name} % 1440) % 60), 2, '0'))"
                             ),
                         )
                 events = events.withColumn("_TIME", F.col(table.timestamp).cast("long"))
@@ -305,6 +311,7 @@ class EHR(object):
                 "INTIME",
                 "INTIME_DATE",
                 "ADMITTIME",
+                "INTIME_24_MINUTES",
                 self.hadm_key,
             )
 
@@ -660,6 +667,7 @@ class EHR(object):
             "AGE",
             "INTIME",
             "ADMITTIME",
+            "IN_ICU_MORTALITY",
         ]
         for item in checklist:
             if item not in icustays.columns.to_list():

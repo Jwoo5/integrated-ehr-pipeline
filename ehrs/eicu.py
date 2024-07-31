@@ -117,13 +117,13 @@ class eICU(EHR):
 
         self._determine_first_icu = "unitvisitnumber"
 
-    def build_cohorts(self, cached=False):
+    def build_cohorts(self, spark, cached=False):
         icustays = pd.read_csv(os.path.join(self.data_dir, self.icustay_fname))
 
         icustays = self.make_compatible(icustays)
         self.icustays = icustays
 
-        cohorts = super().build_cohorts(icustays, cached=cached)
+        cohorts = super().build_cohorts(icustays, spark, cached=cached)
 
         return cohorts
 
@@ -134,58 +134,13 @@ class eICU(EHR):
 
         # hacks for compatibility with other ehrs
         icustays["ADMITTIME"] = 0
-        icustays["DEATHTIME"] = np.nan
-        is_dead = icustays["hospitaldischargestatus"] == "Expired"
-        icustays.loc[is_dead, "DEATHTIME"] = (
-            icustays.loc[is_dead, "hospitaldischargeoffset"]
-            - icustays.loc[is_dead, "hospitaladmitoffset"]
-        )
+        icustays["IN_ICU_MORTALITY"] = icustays["unitdischargestatus"] == "Expired"
+
         icustays["INTIME"] = -icustays["hospitaladmitoffset"]
         icustays["LOS"] = icustays["unitdischargeoffset"] / 60 / 24
-
-        # TODO: build diagnosis here
-        diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
-        # If only ICD10 -> Convert to ICD9
-        # Both ICD9/10 -> Remove ICD10
-        diagnosis["icd9code"] = (
-            diagnosis["icd9code"].str.replace(".", "").str.split(",")
+        icustays["INTIME_24_MINUTES"] = (
+            pd.to_timedelta(icustays["unitadmittime24"]).dt.total_seconds() // 60
         )
-        diagnosis = diagnosis.explode("icd9code")
-
-        gem = pd.read_csv(self.gem_path)
-        map_cms = dict(zip(gem["icd10cm"], gem["icd9cm"]))
-
-        def convert_icd_9(code, map_cms):
-            # All V codes in eICU are ICD-9, E codes are ICD-10
-            if pd.isnull(code):
-                return None
-            elif code.startswith("V") or code.isdigit():
-                return code
-            else:
-                if code in map_cms:
-                    return map_cms[code]
-                else:
-                    return None
-
-        diagnosis["icd9code"] = diagnosis["icd9code"].map(
-            lambda x: convert_icd_9(x, map_cms)
-        )
-
-        diagnosis = (
-            diagnosis.groupby(self.icustay_key)[["diagnosisstring", "icd9code"]]
-            .agg(lambda x: set(x) - set([None]))
-            .reset_index()
-        )
-
-        diagnosis = diagnosis.rename(
-            columns={"diagnosisstring": "icd_text", "icd9code": "icd_9"}
-        )
-        # ICD-9 에 None 들어간 경우 지워야 함!
-        # left join -> NaN 발생!
-        icustays = icustays.merge(diagnosis, on=self.icustay_key, how="left")
-
-        icustays["icd_text"] = icustays["icd_text"].fillna("").map(list)
-        icustays["icd_9"] = icustays["icd_9"].fillna("").map(list)
 
         return icustays
 
