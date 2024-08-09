@@ -144,6 +144,24 @@ def get_parser():
         help="csv path derived from MIMIC-IV using mimic-code repository",
     )
 
+    parser.add_argument(
+        "--note_path",
+        default="/nfs_data_storage/mimic-iv-note-2.2/physionet.org/files/mimic-iv-note/2.2/note/",
+        help="path to mimic-iv-note",
+    )
+
+    parser.add_argument(
+        "--ed_path",
+        default="/nfs_data_storage/mimic-iv-ed/2.2/ed/",
+        help="path to mimic-iv-ed",
+    )
+
+    parser.add_argument(
+        "--sepsis_only",
+        action="store_true",
+        help="Use only events after sepsis",
+    )
+
     return parser
 
 

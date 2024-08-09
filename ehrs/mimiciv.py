@@ -232,8 +232,30 @@ class MIMICIV(EHR):
             & (icustays["discharge_location"] == "DIED")
         )
 
-        icustays = self.sofa_score(icustays)
+        if self.sepsis_only:
+            sepsis = pd.read_csv(os.path.join(self.cfg.derived_path, "sepsis3.csv"))
 
+            icustays = icustays.merge(
+                sepsis[["stay_id", "suspected_infection_time"]],
+                on="stay_id",
+                how="inner",
+            )
+
+            icustays["suspected_infection_time"] = pd.to_datetime(
+                icustays["suspected_infection_time"],
+                utc=True,
+                infer_datetime_format=True,
+            )
+
+            icustays["SEPSIS_OFFSET"] = icustays.apply(
+                lambda x: (x["suspected_infection_time"] - x["INTIME"]).total_seconds()
+                // 60,
+                axis=1,
+            )
+
+            icustays = icustays.drop(columns=["suspected_infection_time"])
+
+        icustays = self.sofa_score(icustays)
         icustays = self.vis_score(icustays, spark)
 
         icustays["INTIME_DATE"] = icustays["INTIME"].dt.date

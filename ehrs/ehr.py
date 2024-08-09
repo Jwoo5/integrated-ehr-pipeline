@@ -112,6 +112,9 @@ class EHR(object):
         self.debug = cfg.debug
         self.add_chart = cfg.add_chart
 
+
+        self.sepsis_only = cfg.sepsis_only
+
     @property
     def icustay_fname(self):
         return self._icustay_fname
@@ -240,17 +243,19 @@ class EHR(object):
                 if self.icustay_key in events.columns:
                     events = events.drop(self.icustay_key)
 
+                cohort_cols = [
+                    self.hadm_key,
+                    self.icustay_key,
+                    "INTIME",
+                    "INTIME_DATE",
+                    "ADMITTIME",
+                    "LOS",
+                ]
+                if self.sepsis_only:
+                    cohort_cols.append("SEPSIS_OFFSET")
+
                 events = events.join(
-                    F.broadcast(
-                        cohorts.select(
-                            self.hadm_key,
-                            self.icustay_key,
-                            "INTIME",
-                            "INTIME_DATE",
-                            "ADMITTIME",
-                            "LOS",
-                        )
-                    ),
+                    F.broadcast(cohorts.select(*cohort_cols)),
                     on=self.hadm_key,
                     how="right",
                 )
@@ -305,6 +310,11 @@ class EHR(object):
             events = events.filter(F.col("_TIME") >= 0).filter(
                 F.col("_TIME") < F.col("LOS") * 60 * 24
             )
+
+            if self.sepsis_only:
+                events = events.filter(F.col("_TIME") >= F.col("SEPSIS_OFFSET")).drop(
+                    "SEPSIS_OFFSET"
+                )
 
             events = events.drop(
                 "LOS",
