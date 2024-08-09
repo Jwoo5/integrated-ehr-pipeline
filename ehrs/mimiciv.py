@@ -232,12 +232,36 @@ class MIMICIV(EHR):
             & (icustays["discharge_location"] == "DIED")
         )
 
+        icustays = self.sofa_score(icustays)
+
+        icustays = self.vis_score(icustays, spark)
+
+        icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
+
+        icustays["INTIME"] = (
+            icustays["INTIME"] - icustays["ADMITTIME"]
+        ).dt.total_seconds() // 60
+
+        icustays = icustays.drop(
+            columns=[
+                "first_careunit",
+                "last_careunit",
+                "anchor_age",
+                "anchor_year",
+                "anchor_year_group",
+                "discharge_location",
+            ]
+        )
+
+        return icustays
+
+    def sofa_score(self, cohorts):
         sofa_df = pd.read_csv(
             os.path.join(self.cfg.derived_path, "sofa.csv"),
             usecols=["stay_id", "starttime", "sofa_24hours"],
         )
         sofa_df = pd.merge(
-            icustays[["stay_id", "INTIME"]], sofa_df, on="stay_id", how="left"
+            cohorts[["stay_id", "INTIME"]], sofa_df, on="stay_id", how="left"
         )
         sofa_df["starttime"] = pd.to_datetime(
             sofa_df["starttime"], infer_datetime_format=True, utc=True
@@ -255,11 +279,11 @@ class MIMICIV(EHR):
             lambda x: (x["offset"], x["sofa_24hours"]), axis=1
         )
         sofa_df.reset_index(inplace=True)
-        icustays = pd.merge(
-            icustays, sofa_df[["stay_id", "sofa"]], on="stay_id", how="left"
+        cohorts = pd.merge(
+            cohorts, sofa_df[["stay_id", "sofa"]], on="stay_id", how="left"
         )
 
-        return icustays
+        return cohorts
 
     def vis_score(self, cohorts, spark):
         weights = spark.read.csv(
