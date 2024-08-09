@@ -8,9 +8,8 @@ time.tzset()
 
 import sys
 
-from pyspark.sql import SparkSession
-
 from ehrs import EHR_REGISTRY
+from pyspark.sql import SparkSession
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
