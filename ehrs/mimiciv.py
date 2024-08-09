@@ -258,6 +258,71 @@ class MIMICIV(EHR):
         icustays = self.sofa_score(icustays)
         icustays = self.vis_score(icustays, spark)
 
+        # Add Chief Complaint
+        if os.path.exists(os.path.join(self.note_path, "discharge.csv.gz")):
+            notes = pd.read_csv(os.path.join(self.note_path, "discharge.csv.gz"))
+        elif os.path.exists(os.path.join(self.note_path, "discharge.csv")):
+            notes = pd.read_csv(os.path.join(self.note_path, "discharge.csv"))
+        else:
+            raise FileNotFoundError("MIMIC-IV Note file is not found.")
+
+        def _find_complaint(text):
+            _text = text.lower()
+            headers = re.findall(r"^\s*(\S[^:\n]*:)", _text, re.MULTILINE)
+            complaint_headers = [
+                header for header in headers if "complaint" in header.lower()
+            ]
+
+            if len(complaint_headers) == 0:
+                return ""
+
+            complaint_header = complaint_headers[0]
+
+            header_idx = headers.index(complaint_header)
+            if header_idx == len(headers) - 1:
+                return text[
+                    text.find(complaint_header) + len(complaint_header) :
+                ].strip()
+            else:
+                complaint_header_idx = _text.find(complaint_header)
+                next_header_idx = _text.find(headers[header_idx + 1])
+
+                complaint = text[
+                    complaint_header_idx + len(complaint_header) : next_header_idx
+                ].strip()
+
+            return complaint
+
+        notes["CHIEF_COMPLAINT"] = notes["text"].map(_find_complaint)
+
+        icustays = icustays.merge(
+            notes[["hadm_id", "CHIEF_COMPLAINT"]],
+            on="hadm_id",
+            how="left",
+        )
+
+        # Add Initial Dx
+        if os.path.exists(os.path.join(self.ed_path, "diagnosis.csv.gz")):
+            ed_dx = pd.read_csv(os.path.join(self.ed_path, "diagnosis.csv.gz"))
+            ed_stay = pd.read_csv(os.path.join(self.ed_path, "edstays.csv.gz"))
+        elif os.path.exists(os.path.join(self.ed_path, "diagnosis.csv")):
+            ed_dx = pd.read_csv(os.path.join(self.ed_path, "diagnosis.csv"))
+            ed_stay = pd.read_csv(os.path.join(self.ed_path, "edstays.csv"))
+        else:
+            raise FileNotFoundError("MIMIC-IV ED file is not found.")
+
+        ed_dx = ed_dx.rename(columns={"icd_title": "INITIAL_DIAGNOSIS"})
+        ed = pd.merge(ed_stay, ed_dx, on="stay_id", how="left")
+        ed = ed[["hadm_id", "INITIAL_DIAGNOSIS"]]
+        ed = ed.dropna(subset=["INITIAL_DIAGNOSIS"])
+        ed = ed.groupby("hadm_id").agg(lambda x: ", ".join(x)).reset_index()
+
+        icustays = icustays.merge(
+            ed,
+            on="hadm_id",
+            how="left",
+        )
+
         icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
 
         icustays["INTIME"] = (

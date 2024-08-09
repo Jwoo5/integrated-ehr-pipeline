@@ -112,6 +112,8 @@ class EHR(object):
         self.debug = cfg.debug
         self.add_chart = cfg.add_chart
 
+        self.note_path = cfg.note_path
+        self.ed_path = cfg.ed_path
 
         self.sepsis_only = cfg.sepsis_only
 
