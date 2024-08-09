@@ -680,6 +680,7 @@ class EHR(object):
             "INTIME",
             "ADMITTIME",
             "IN_ICU_MORTALITY",
+            "DEATHTIME",
         ]
         for item in checklist:
             if item not in icustays.columns.to_list():

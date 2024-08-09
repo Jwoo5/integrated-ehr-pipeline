@@ -192,6 +192,7 @@ class MIMICIV(EHR):
         )
         admissions = admissions.rename(
             columns={
+                "deathtime": "DEATHTIME",
                 "dischtime": "DISCHTIME",
                 "admittime": "ADMITTIME",
             }
@@ -214,7 +215,14 @@ class MIMICIV(EHR):
 
         icustays = icustays.merge(
             admissions[
-                [self.hadm_key, "DISCHTIME", "ADMITTIME", "race", "discharge_location"]
+                [
+                    self.hadm_key,
+                    "DISCHTIME",
+                    "ADMITTIME",
+                    "race",
+                    "discharge_location",
+                    "DEATHTIME",
+                ]
             ],
             how="left",
             on=self.hadm_key,
@@ -225,6 +233,9 @@ class MIMICIV(EHR):
         )
         icustays["DISCHTIME"] = pd.to_datetime(
             icustays["DISCHTIME"], infer_datetime_format=True, utc=True
+        )
+        icustays["DEATHTIME"] = pd.to_datetime(
+            icustays["DEATHTIME"], infer_datetime_format=True, utc=True
         )
         icustays["IN_ICU_MORTALITY"] = (
             (icustays["INTIME"] < icustays["DISCHTIME"])
@@ -324,6 +335,11 @@ class MIMICIV(EHR):
         )
 
         icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
+
+        # Deathtime must be offset from intime to make pred
+        icustays["DEATHTIME"] = (
+            icustays["DEATHTIME"] - icustays["INTIME"]
+        ).dt.total_seconds() // 60
 
         icustays["INTIME"] = (
             icustays["INTIME"] - icustays["ADMITTIME"]
