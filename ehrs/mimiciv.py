@@ -219,25 +219,6 @@ class MIMICIV(EHR):
             how="left",
             on=self.hadm_key,
         )
-        diagnosis = pd.read_csv(os.path.join(self.data_dir, self.diagnosis_fname))
-        d_diagnosis = pd.read_csv(os.path.join(self.data_dir, self.d_diagnosis_fname))
-
-        diagnosis = diagnosis.merge(
-            d_diagnosis, how="left", on=["icd_code", "icd_version"]
-        )
-
-        diagnosis = self.icd10toicd9(diagnosis)
-
-        diagnosis = (
-            diagnosis[[self.hadm_key, "icd_code_converted", "long_title"]]
-            .groupby(self.hadm_key)
-            .agg(list)
-            .rename(columns={"icd_code_converted": "icd_9", "long_title": "icd_text"})
-        )
-
-        icustays = icustays.merge(diagnosis, how="left", on=self.hadm_key)
-        icustays["icd_9"] = icustays["icd_9"].fillna("").apply(list)
-        icustays["icd_text"] = icustays["icd_text"].fillna("").apply(list)
 
         icustays["ADMITTIME"] = pd.to_datetime(
             icustays["ADMITTIME"], infer_datetime_format=True, utc=True
@@ -278,64 +259,7 @@ class MIMICIV(EHR):
             icustays, sofa_df[["stay_id", "sofa"]], on="stay_id", how="left"
         )
 
-        icustays = self.vis_score(icustays, spark)
-
-        icustays["INTIME_DATE"] = icustays["INTIME"].dt.date
-
-        icustays["INTIME"] = (
-            icustays["INTIME"] - icustays["ADMITTIME"]
-        ).dt.total_seconds() // 60
-
-        icustays = icustays.drop(
-            columns=[
-                "first_careunit",
-                "last_careunit",
-                "anchor_age",
-                "anchor_year",
-                "anchor_year_group",
-                "discharge_location",
-            ]
-        )
-
         return icustays
-
-    def icd10toicd9(self, dx):
-        gem = pd.read_csv(self.gem_path)
-        dx_icd_10 = dx[dx["icd_version"] == 10]["icd_code"]
-
-        unique_elem_no_map = set(dx_icd_10) - set(gem["icd10cm"])
-
-        map_cms = dict(zip(gem["icd10cm"], gem["icd9cm"]))
-        map_manual = dict.fromkeys(unique_elem_no_map, "NaN")
-
-        for code_10 in map_manual:
-            for i in range(len(code_10), 0, -1):
-                tgt_10 = code_10[:i]
-                if tgt_10 in gem["icd10cm"]:
-                    tgt_9 = (
-                        gem[gem["icd10cm"].str.contains(tgt_10)]["icd9cm"]
-                        .mode()
-                        .iloc[0]
-                    )
-                    map_manual[code_10] = tgt_9
-                    break
-
-        def icd_convert(icd_version, icd_code):
-            if icd_version == 9:
-                return icd_code
-
-            elif icd_code in map_cms:
-                return map_cms[icd_code]
-
-            elif icd_code in map_manual:
-                return map_manual[icd_code]
-            else:
-                logger.warn("WRONG CODE: " + icd_code)
-
-        dx["icd_code_converted"] = dx.apply(
-            lambda x: icd_convert(x["icd_version"], x["icd_code"]), axis=1
-        )
-        return dx
 
     def vis_score(self, cohorts, spark):
         weights = spark.read.csv(
